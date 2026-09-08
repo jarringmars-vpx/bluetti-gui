@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
     QImage,
+    QMouseEvent,
     QPainter,
     QPainterPath,
     QPixmap,
@@ -168,15 +169,22 @@ class SevenSegmentRenderer:
 
 
 class DeviceVisualWidget(QWidget):
+    # Desired state emitted when the photographed button is clicked.
+    dc_output_requested = Signal(bool)
+    ac_output_requested = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
+
         self._model = ""
         self._profile: Optional[dict[str, Any]] = None
         self._state = DeviceVisualState()
         self._base_image = QImage()
+        self._last_target_rect = QRectF()
 
         self.setMinimumSize(360, 250)
         self.setAttribute(Qt.WA_OpaquePaintEvent, False)
+        self.setMouseTracking(True)
 
     def set_model(self, model: str, visual_profile: Optional[dict[str, Any]] = None):
         if model == self._model and visual_profile == self._profile:
@@ -220,6 +228,7 @@ class DeviceVisualWidget(QWidget):
         painter.fillRect(self.rect(), QColor("#181e25"))
 
         if self._base_image.isNull():
+            self._last_target_rect = QRectF()
             painter.setPen(QColor("#8492a0"))
             painter.drawText(
                 self.rect(),
@@ -239,10 +248,12 @@ class DeviceVisualWidget(QWidget):
             self._paint_lcd_values(rendered_pixmap)
 
         target = self._scaled_target_rect(rendered_pixmap)
+        self._last_target_rect = target
         painter.drawPixmap(target, rendered_pixmap, rendered_pixmap.rect())
 
     def _scaled_target_rect(self, pixmap: QPixmap) -> QRectF:
         available = self.rect().adjusted(8, 8, -8, -8)
+
         source_w = pixmap.width()
         source_h = pixmap.height()
 
@@ -258,7 +269,77 @@ class DeviceVisualWidget(QWidget):
         height = source_h * scale
         x = available.x() + (available.width() - width) / 2
         y = available.y() + (available.height() - height) / 2
+
         return QRectF(x, y, width, height)
+
+    def _widget_point_to_normalized(self, x: float, y: float):
+        """
+        Convert a mouse position in widget coordinates into normalized
+        coordinates on the original model image.
+        """
+        target = self._last_target_rect
+
+        if target.isEmpty() or not target.contains(x, y):
+            return None
+
+        nx = (x - target.left()) / target.width()
+        ny = (y - target.top()) / target.height()
+
+        if not (0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0):
+            return None
+
+        return nx, ny
+
+    def _hit_button(self, x: float, y: float) -> Optional[str]:
+        if not self._profile:
+            return None
+
+        normalized = self._widget_point_to_normalized(x, y)
+        if normalized is None:
+            return None
+
+        nx, ny = normalized
+
+        for name, spec in self._profile.get("buttons", {}).items():
+            left = spec["x"]
+            top = spec["y"]
+            right = left + spec["width"]
+            bottom = top + spec["height"]
+
+            if left <= nx <= right and top <= ny <= bottom:
+                return name
+
+        return None
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            hit = self._hit_button(event.position().x(), event.position().y())
+
+            if hit == "dc_output":
+                self.dc_output_requested.emit(not self._state.dc_output_enabled)
+                event.accept()
+                return
+
+            if hit == "ac_output":
+                self.ac_output_requested.emit(not self._state.ac_output_enabled)
+                event.accept()
+                return
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        hit = self._hit_button(event.position().x(), event.position().y())
+
+        if hit in ("dc_output", "ac_output"):
+            self.setCursor(Qt.PointingHandCursor)
+        else:
+            self.unsetCursor()
+
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self.unsetCursor()
+        super().leaveEvent(event)
 
     def _paint_lcd_values(self, pixmap: QPixmap):
         fields = self._profile.get("display", {}).get("fields", {})
@@ -330,17 +411,6 @@ class DeviceVisualWidget(QWidget):
                 self._mute_green_region(image, spec)
 
     def _mute_green_region(self, image: QImage, spec: dict[str, Any]):
-        """
-        Turn an illuminated photographed button into an OFF-state button.
-
-        Two green ranges are treated differently:
-        - Bright/high-luminance green pixels are assumed to be the printed
-          symbol/letters. They are desaturated to a readable dim gray-green.
-        - Mid/darker green pixels are assumed to be illumination/glow and are
-          muted much more aggressively.
-
-        This preserves symbol readability while still removing the lit look.
-        """
         width = image.width()
         height = image.height()
 
@@ -353,7 +423,9 @@ class DeviceVisualWidget(QWidget):
         dominance = int(spec.get("green_dominance", 6))
 
         symbol_green_threshold = int(spec.get("symbol_green_threshold", 150))
-        symbol_luminance_threshold = int(spec.get("symbol_luminance_threshold", 95))
+        symbol_luminance_threshold = int(
+            spec.get("symbol_luminance_threshold", 95)
+        )
 
         glow_neutral_scale = float(spec.get("glow_neutral_scale", 0.22))
         glow_residual_green = float(spec.get("glow_residual_green", 0.08))
@@ -373,20 +445,19 @@ class DeviceVisualWidget(QWidget):
                 ):
                     continue
 
-                luminance = int(0.2126 * r + 0.7152 * g + 0.0722 * b)
+                luminance = int(
+                    0.2126 * r + 0.7152 * g + 0.0722 * b
+                )
 
                 if (
                     g >= symbol_green_threshold
                     and luminance >= symbol_luminance_threshold
                 ):
-                    # Bright symbol/letter pixel: keep it readable but remove
-                    # the neon-green illuminated appearance.
                     base = int(luminance * symbol_brightness)
                     nr = base
                     ng = min(255, base + symbol_green_bias)
                     nb = base
                 else:
-                    # Glow/background green: strongly mute toward dark neutral.
                     base = int(luminance * glow_neutral_scale)
                     nr = base
                     ng = int(base + g * glow_residual_green)

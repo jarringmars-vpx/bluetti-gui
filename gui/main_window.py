@@ -180,7 +180,19 @@ class MainWindow(QMainWindow):
         left_layout.setSpacing(12)
 
         self.image_label = DeviceVisualWidget()
-        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.image_label.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+
+        # The photographed AC/DC buttons invoke the same backend controls as
+        # the regular dashboard buttons.
+        self.image_label.dc_output_requested.connect(
+            self._set_dc_output_from_image
+        )
+        self.image_label.ac_output_requested.connect(
+            self._set_ac_output_from_image
+        )
 
         soc_caption = QLabel("Battery State of Charge")
         soc_caption.setObjectName("sectionLabel")
@@ -273,13 +285,19 @@ class MainWindow(QMainWindow):
         secondary = QHBoxLayout()
         secondary.setSpacing(14)
 
-        thermal_group = InfoGroup("Temperature", self._icon("temperature"))
+        thermal_group = InfoGroup(
+            "Temperature",
+            self._icon("temperature"),
+        )
         self.temperature_value = QLabel("-- °C")
         self.temperature_value.setObjectName("secondaryValue")
         thermal_group.layout_box.addWidget(self.temperature_value)
         thermal_group.layout_box.addStretch()
 
-        charging_group = InfoGroup("Charging Mode", self._icon("charging_mode"))
+        charging_group = InfoGroup(
+            "Charging Mode",
+            self._icon("charging_mode"),
+        )
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Standard", "Silent", "Turbo"])
         self.mode_combo.currentTextChanged.connect(self._set_mode)
@@ -295,7 +313,9 @@ class MainWindow(QMainWindow):
         content.addWidget(right, 6)
         root.addLayout(content, 1)
 
-        self.footer = QLabel("Mock backend active — BLE connection will be added next.")
+        self.footer = QLabel(
+            "Mock backend active — BLE connection will be added next."
+        )
         self.footer.setObjectName("footer")
         root.addWidget(self.footer)
 
@@ -313,6 +333,14 @@ class MainWindow(QMainWindow):
 
     def _set_dc_output(self, checked: bool):
         self.backend.set_dc_output(checked)
+
+    def _set_ac_output_from_image(self, enabled: bool):
+        self.backend.set_ac_output(enabled)
+        self.refresh()
+
+    def _set_dc_output_from_image(self, enabled: bool):
+        self.backend.set_dc_output(enabled)
+        self.refresh()
 
     def _set_mode(self, mode: str):
         self.backend.set_charging_mode(mode)
@@ -342,8 +370,14 @@ class MainWindow(QMainWindow):
         self.soc_value.setText(f"{t.soc}%")
         self.soc_bar.setValue(t.soc)
 
-        total_output_watts = max(0, t.ac_output_power) + max(0, t.dc_output_power)
-        total_input_watts = max(0, t.ac_input_power) + max(0, t.dc_input_power)
+        total_output_watts = (
+            max(0, t.ac_output_power)
+            + max(0, t.dc_output_power)
+        )
+        total_input_watts = (
+            max(0, t.ac_input_power)
+            + max(0, t.dc_input_power)
+        )
 
         self.runtime_estimator.add_output_sample(total_output_watts)
 
@@ -376,14 +410,18 @@ class MainWindow(QMainWindow):
         self.ac_button.blockSignals(True)
         self.ac_button.setChecked(t.ac_output_enabled)
         self.ac_button.setText(
-            "AC OUTPUT ON" if t.ac_output_enabled else "AC OUTPUT OFF"
+            "AC OUTPUT ON"
+            if t.ac_output_enabled
+            else "AC OUTPUT OFF"
         )
         self.ac_button.blockSignals(False)
 
         self.dc_button.blockSignals(True)
         self.dc_button.setChecked(t.dc_output_enabled)
         self.dc_button.setText(
-            "DC OUTPUT ON" if t.dc_output_enabled else "DC OUTPUT OFF"
+            "DC OUTPUT ON"
+            if t.dc_output_enabled
+            else "DC OUTPUT OFF"
         )
         self.dc_button.blockSignals(False)
 

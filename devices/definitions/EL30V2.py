@@ -9,9 +9,9 @@ VISUAL_PROFILE = {
         "digit_color": "#F4FBFF",
 
         "fields": {
-            # v0.2.10 retains the v0.2.9 leftward LCD corrections.
+            # v0.2.11 maximized-view fine calibration.
             "input_watts": {
-                "x": 0.388,
+                "x": 0.386,
                 "y": 0.362,
                 "width": 0.052,
                 "height": 0.038,
@@ -22,7 +22,7 @@ VISUAL_PROFILE = {
             },
 
             "soc": {
-                "x": 0.470,
+                "x": 0.465,
                 "y": 0.359,
                 "width": 0.039,
                 "height": 0.041,
@@ -33,7 +33,7 @@ VISUAL_PROFILE = {
             },
 
             "output_watts": {
-                "x": 0.535,
+                "x": 0.522,
                 "y": 0.362,
                 "width": 0.052,
                 "height": 0.038,
@@ -53,6 +53,8 @@ VISUAL_PROFILE = {
         },
     },
 
+    # The same normalized rectangles are used both for visual recoloring and
+    # mouse hit-testing on the photographed AC/DC buttons.
     "buttons": {
         "dc_output": {
             "x": 0.359,
