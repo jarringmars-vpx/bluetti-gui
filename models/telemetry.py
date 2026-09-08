@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass
 class Telemetry:
     model: str = "EL30V2"
@@ -12,7 +13,7 @@ class Telemetry:
 
     ac_output_power: int = 84
     dc_output_power: int = 12
-    pv_input_power: int = 146
+    dc_input_power: int = 146
     ac_input_power: int = 0
 
     temperature_c: float = 31.7

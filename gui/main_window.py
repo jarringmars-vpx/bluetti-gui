@@ -1,41 +1,76 @@
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap, QFont
+from PySide6.QtGui import QPixmap, QAction
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QPushButton, QComboBox, QProgressBar, QSizePolicy
+    QMainWindow,
+    QWidget,
+    QLabel,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QFrame,
+    QPushButton,
+    QComboBox,
+    QProgressBar,
+    QSizePolicy,
 )
 
 from backends.mock_backend import MockBackend
 from devices.image_resolver import resolve_model_image
+from services.runtime_estimator import RuntimeEstimator
+from services.settings_service import SettingsService
+from gui.settings_window import SettingsWindow
+from devices.definitions.EL30V2 import CAPACITY_WH as EL30V2_CAPACITY_WH
 
 
-class MetricCard(QFrame):
-    def __init__(self, title: str, value: str = "--", parent=None):
+class MetricRow(QWidget):
+    def __init__(self, label: str, value: str = "--", parent=None):
         super().__init__(parent)
-        self.setObjectName("metricCard")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
 
-        title_label = QLabel(title)
-        title_label.setObjectName("metricTitle")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        name = QLabel(label)
+        name.setObjectName("metricRowLabel")
 
         self.value_label = QLabel(value)
-        self.value_label.setObjectName("metricValue")
+        self.value_label.setObjectName("metricRowValue")
+        self.value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        layout.addWidget(title_label)
+        layout.addWidget(name)
+        layout.addStretch()
         layout.addWidget(self.value_label)
 
-    def set_value(self, text: str):
-        self.value_label.setText(text)
+    def set_value(self, value: str):
+        self.value_label.setText(value)
+
+
+class InfoGroup(QFrame):
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("infoGroup")
+
+        self.layout_box = QVBoxLayout(self)
+        self.layout_box.setContentsMargins(16, 14, 16, 14)
+        self.layout_box.setSpacing(10)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("groupTitle")
+        self.layout_box.addWidget(title_label)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.backend = MockBackend()
-        self.setWindowTitle("BLUETTI Monitor")
-        self.resize(1180, 760)
 
+        self.backend = MockBackend()
+        self.settings_service = SettingsService()
+        self.app_settings = self.settings_service.load()
+        self.runtime_estimator = RuntimeEstimator()
+
+        self.setWindowTitle("BLUETTI Monitor")
+        self.resize(1220, 780)
+
+        self._build_menu()
         self._build_ui()
         self._apply_styles()
 
@@ -45,6 +80,13 @@ class MainWindow(QMainWindow):
 
         self.refresh()
 
+    def _build_menu(self):
+        settings_action = QAction("Settings", self)
+        settings_action.triggered.connect(self._open_settings)
+
+        settings_menu = self.menuBar().addMenu("Settings")
+        settings_menu.addAction(settings_action)
+
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -53,12 +95,12 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(22, 20, 22, 20)
         root.setSpacing(18)
 
-        # Header
         header = QHBoxLayout()
 
         title_box = QVBoxLayout()
         app_title = QLabel("BLUETTI Monitor")
         app_title.setObjectName("appTitle")
+
         self.model_label = QLabel("--")
         self.model_label.setObjectName("modelLabel")
 
@@ -71,18 +113,18 @@ class MainWindow(QMainWindow):
         header.addLayout(title_box)
         header.addStretch()
         header.addWidget(self.connection_label)
+
         root.addLayout(header)
 
-        # Main content
         content = QHBoxLayout()
         content.setSpacing(18)
 
-        # Left: image and SOC
+        # LEFT PANEL: image, SOC, Time Remaining
         left = QFrame()
         left.setObjectName("panel")
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(18, 18, 18, 18)
-        left_layout.setSpacing(14)
+        left_layout.setSpacing(12)
 
         self.image_label = QLabel("No model image")
         self.image_label.setAlignment(Qt.AlignCenter)
@@ -92,6 +134,7 @@ class MainWindow(QMainWindow):
 
         soc_caption = QLabel("Battery State of Charge")
         soc_caption.setObjectName("sectionLabel")
+
         self.soc_value = QLabel("--%")
         self.soc_value.setAlignment(Qt.AlignCenter)
         self.soc_value.setObjectName("socValue")
@@ -101,85 +144,120 @@ class MainWindow(QMainWindow):
         self.soc_bar.setTextVisible(False)
         self.soc_bar.setFixedHeight(18)
 
+        runtime_caption = QLabel("Time Remaining")
+        runtime_caption.setAlignment(Qt.AlignCenter)
+        runtime_caption.setObjectName("sectionLabel")
+
+        self.runtime_value = QLabel("--")
+        self.runtime_value.setAlignment(Qt.AlignCenter)
+        self.runtime_value.setObjectName("runtimeValue")
+
         left_layout.addWidget(self.image_label, 1)
         left_layout.addWidget(soc_caption)
         left_layout.addWidget(self.soc_value)
         left_layout.addWidget(self.soc_bar)
+        left_layout.addSpacing(4)
+        left_layout.addWidget(runtime_caption)
+        left_layout.addWidget(self.runtime_value)
 
         content.addWidget(left, 4)
 
-        # Right: telemetry and controls
+        # RIGHT PANEL: AC, DC, Battery + secondary information
         right = QFrame()
         right.setObjectName("panel")
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(18, 18, 18, 18)
         right_layout.setSpacing(16)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        top_grid = QGridLayout()
+        top_grid.setHorizontalSpacing(14)
+        top_grid.setVerticalSpacing(14)
 
-        self.cards = {
-            "battery_voltage": MetricCard("Battery Voltage"),
-            "battery_current": MetricCard("Battery Current"),
-            "battery_flow": MetricCard("Battery Flow"),
-            "temperature": MetricCard("Temperature"),
-            "ac_output_power": MetricCard("AC Output"),
-            "dc_output_power": MetricCard("DC Output"),
-            "pv_input_power": MetricCard("PV/DC Input"),
-            "ac_input_power": MetricCard("AC/Grid Input"),
-        }
-
-        positions = [
-            ("battery_voltage", 0, 0),
-            ("battery_current", 0, 1),
-            ("battery_flow", 0, 2),
-            ("temperature", 0, 3),
-            ("ac_output_power", 1, 0),
-            ("dc_output_power", 1, 1),
-            ("pv_input_power", 1, 2),
-            ("ac_input_power", 1, 3),
-        ]
-
-        for key, row, col in positions:
-            grid.addWidget(self.cards[key], row, col)
-
-        right_layout.addLayout(grid)
-
-        controls_title = QLabel("Controls")
-        controls_title.setObjectName("sectionLabel")
-        right_layout.addWidget(controls_title)
-
-        controls = QHBoxLayout()
-        controls.setSpacing(12)
-
-        self.ac_button = QPushButton("AC Output")
+        ac_group = InfoGroup("AC")
+        self.ac_button = QPushButton("AC OUTPUT")
         self.ac_button.setCheckable(True)
+        self.ac_button.setObjectName("stateButton")
         self.ac_button.clicked.connect(self._set_ac_output)
 
-        self.dc_button = QPushButton("DC Output")
+        self.ac_input_row = MetricRow("Input")
+        self.ac_output_row = MetricRow("Output")
+
+        ac_group.layout_box.addWidget(self.ac_button)
+        ac_group.layout_box.addWidget(self.ac_input_row)
+        ac_group.layout_box.addWidget(self.ac_output_row)
+        ac_group.layout_box.addStretch()
+
+        dc_group = InfoGroup("DC")
+        self.dc_button = QPushButton("DC OUTPUT")
         self.dc_button.setCheckable(True)
+        self.dc_button.setObjectName("stateButton")
         self.dc_button.clicked.connect(self._set_dc_output)
 
+        self.dc_input_row = MetricRow("Input")
+        self.dc_output_row = MetricRow("Output")
+
+        dc_group.layout_box.addWidget(self.dc_button)
+        dc_group.layout_box.addWidget(self.dc_input_row)
+        dc_group.layout_box.addWidget(self.dc_output_row)
+        dc_group.layout_box.addStretch()
+
+        battery_group = InfoGroup("Battery")
+        self.battery_voltage_row = MetricRow("Voltage")
+        self.battery_current_row = MetricRow("Current")
+        self.battery_flow_row = MetricRow("State")
+
+        battery_group.layout_box.addWidget(self.battery_voltage_row)
+        battery_group.layout_box.addWidget(self.battery_current_row)
+        battery_group.layout_box.addWidget(self.battery_flow_row)
+        battery_group.layout_box.addStretch()
+
+        top_grid.addWidget(ac_group, 0, 0)
+        top_grid.addWidget(dc_group, 0, 1)
+        top_grid.addWidget(battery_group, 0, 2)
+
+        top_grid.setColumnStretch(0, 1)
+        top_grid.setColumnStretch(1, 1)
+        top_grid.setColumnStretch(2, 1)
+
+        right_layout.addLayout(top_grid)
+
+        secondary = QHBoxLayout()
+        secondary.setSpacing(14)
+
+        thermal_group = InfoGroup("Temperature")
+        self.temperature_value = QLabel("-- °C")
+        self.temperature_value.setObjectName("secondaryValue")
+        thermal_group.layout_box.addWidget(self.temperature_value)
+        thermal_group.layout_box.addStretch()
+
+        charging_group = InfoGroup("Charging Mode")
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Standard", "Silent", "Turbo"])
         self.mode_combo.currentTextChanged.connect(self._set_mode)
+        charging_group.layout_box.addWidget(self.mode_combo)
+        charging_group.layout_box.addStretch()
 
-        controls.addWidget(self.ac_button)
-        controls.addWidget(self.dc_button)
-        controls.addStretch()
-        controls.addWidget(QLabel("Charging Mode:"))
-        controls.addWidget(self.mode_combo)
+        secondary.addWidget(thermal_group, 1)
+        secondary.addWidget(charging_group, 1)
 
-        right_layout.addLayout(controls)
+        right_layout.addLayout(secondary)
         right_layout.addStretch()
 
         content.addWidget(right, 6)
         root.addLayout(content, 1)
 
-        footer = QLabel("Mock backend active — BLE connection will be added next.")
-        footer.setObjectName("footer")
-        root.addWidget(footer)
+        self.footer = QLabel("Mock backend active — BLE connection will be added next.")
+        self.footer.setObjectName("footer")
+        root.addWidget(self.footer)
+
+    def _open_settings(self):
+        dialog = SettingsWindow(self.settings_service, self)
+        dialog.settings_changed.connect(self._settings_changed)
+        dialog.exec()
+
+    def _settings_changed(self, settings):
+        self.app_settings = settings
+        self.refresh()
 
     def _set_ac_output(self, checked: bool):
         self.backend.set_ac_output(checked)
@@ -192,6 +270,7 @@ class MainWindow(QMainWindow):
 
     def _load_model_image(self, model: str):
         path = resolve_model_image(model)
+
         if path is None:
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText(
@@ -200,6 +279,7 @@ class MainWindow(QMainWindow):
             return
 
         pixmap = QPixmap(str(path))
+
         if pixmap.isNull():
             self.image_label.setPixmap(QPixmap())
             self.image_label.setText(f"Unable to load:\n{path.name}")
@@ -208,22 +288,33 @@ class MainWindow(QMainWindow):
         scaled = pixmap.scaled(
             self.image_label.size(),
             Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
+            Qt.SmoothTransformation,
         )
+
         self.image_label.setText("")
         self.image_label.setPixmap(scaled)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+
         if hasattr(self, "current_model"):
             self._load_model_image(self.current_model)
+
+    def _capacity_for_model(self, model: str) -> float:
+        if model == "EL30V2":
+            return EL30V2_CAPACITY_WH
+
+        return 0.0
 
     def refresh(self):
         t = self.backend.get_telemetry()
         self.current_model = t.model
 
         self.model_label.setText(t.model)
-        self.connection_label.setText("● Connected" if t.connected else "● Disconnected")
+
+        self.connection_label.setText(
+            "● Connected" if t.connected else "● Disconnected"
+        )
         self.connection_label.setProperty("connected", t.connected)
         self.connection_label.style().unpolish(self.connection_label)
         self.connection_label.style().polish(self.connection_label)
@@ -231,23 +322,43 @@ class MainWindow(QMainWindow):
         self.soc_value.setText(f"{t.soc}%")
         self.soc_bar.setValue(t.soc)
 
-        self.cards["battery_voltage"].set_value(f"{t.battery_voltage:.2f} V")
-        self.cards["battery_current"].set_value(f"{t.battery_current:.1f} A")
-        self.cards["battery_flow"].set_value(t.battery_flow)
-        self.cards["temperature"].set_value(f"{t.temperature_c:.1f} °C")
-        self.cards["ac_output_power"].set_value(f"{t.ac_output_power} W")
-        self.cards["dc_output_power"].set_value(f"{t.dc_output_power} W")
-        self.cards["pv_input_power"].set_value(f"{t.pv_input_power} W")
-        self.cards["ac_input_power"].set_value(f"{t.ac_input_power} W")
+        total_output_watts = max(0, t.ac_output_power) + max(0, t.dc_output_power)
+        self.runtime_estimator.add_output_sample(total_output_watts)
+
+        capacity_wh = self._capacity_for_model(t.model)
+        estimate = self.runtime_estimator.estimate_minutes(
+            capacity_wh=capacity_wh,
+            soc_percent=t.soc,
+            current_output_watts=total_output_watts,
+            method=self.app_settings.runtime_method,
+            average_minutes=self.app_settings.average_minutes,
+        )
+        self.runtime_value.setText(self.runtime_estimator.format_minutes(estimate))
+
+        self.ac_input_row.set_value(f"{t.ac_input_power} W")
+        self.ac_output_row.set_value(f"{t.ac_output_power} W")
+
+        self.dc_input_row.set_value(f"{t.dc_input_power} W")
+        self.dc_output_row.set_value(f"{t.dc_output_power} W")
+
+        self.battery_voltage_row.set_value(f"{t.battery_voltage:.2f} V")
+        self.battery_current_row.set_value(f"{t.battery_current:.1f} A")
+        self.battery_flow_row.set_value(t.battery_flow)
+
+        self.temperature_value.setText(f"{t.temperature_c:.1f} °C")
 
         self.ac_button.blockSignals(True)
         self.ac_button.setChecked(t.ac_output_enabled)
-        self.ac_button.setText("AC Output ON" if t.ac_output_enabled else "AC Output OFF")
+        self.ac_button.setText(
+            "AC OUTPUT ON" if t.ac_output_enabled else "AC OUTPUT OFF"
+        )
         self.ac_button.blockSignals(False)
 
         self.dc_button.blockSignals(True)
         self.dc_button.setChecked(t.dc_output_enabled)
-        self.dc_button.setText("DC Output ON" if t.dc_output_enabled else "DC Output OFF")
+        self.dc_button.setText(
+            "DC OUTPUT ON" if t.dc_output_enabled else "DC OUTPUT OFF"
+        )
         self.dc_button.blockSignals(False)
 
         self.mode_combo.blockSignals(True)
@@ -263,6 +374,21 @@ class MainWindow(QMainWindow):
                 color: #e9eef5;
                 font-family: Segoe UI, Arial, sans-serif;
                 font-size: 14px;
+            }
+
+            QMenuBar {
+                background: #11151a;
+                color: #e9eef5;
+            }
+
+            QMenuBar::item:selected, QMenu::item:selected {
+                background: #2b3540;
+            }
+
+            QMenu {
+                background: #181e25;
+                color: #e9eef5;
+                border: 1px solid #2a333d;
             }
 
             #appTitle {
@@ -290,19 +416,24 @@ class MainWindow(QMainWindow):
                 border-radius: 14px;
             }
 
-            #metricCard {
+            #infoGroup {
                 background: #202731;
                 border: 1px solid #2e3945;
                 border-radius: 10px;
             }
 
-            #metricTitle {
-                color: #9ba9b8;
-                font-size: 12px;
+            #groupTitle {
+                font-size: 17px;
+                font-weight: 700;
+                color: #dce5ee;
             }
 
-            #metricValue {
-                font-size: 20px;
+            #metricRowLabel {
+                color: #9ba9b8;
+            }
+
+            #metricRowValue {
+                font-size: 17px;
                 font-weight: 650;
             }
 
@@ -315,6 +446,16 @@ class MainWindow(QMainWindow):
             #socValue {
                 font-size: 46px;
                 font-weight: 750;
+            }
+
+            #runtimeValue {
+                font-size: 28px;
+                font-weight: 700;
+            }
+
+            #secondaryValue {
+                font-size: 24px;
+                font-weight: 700;
             }
 
             #deviceImage {
@@ -335,21 +476,28 @@ class MainWindow(QMainWindow):
                 border-radius: 9px;
             }
 
+            QPushButton#stateButton {
+                background: #2b3540;
+                border: 1px solid #3b4855;
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-weight: 700;
+            }
+
+            QPushButton#stateButton:hover {
+                background: #34404d;
+            }
+
+            QPushButton#stateButton:checked {
+                background: #166f4b;
+                border-color: #2da870;
+            }
+
             QPushButton {
                 background: #2b3540;
                 border: 1px solid #3b4855;
                 border-radius: 8px;
-                padding: 10px 16px;
-                font-weight: 600;
-            }
-
-            QPushButton:hover {
-                background: #34404d;
-            }
-
-            QPushButton:checked {
-                background: #166f4b;
-                border-color: #2da870;
+                padding: 9px 14px;
             }
 
             QComboBox {
@@ -358,6 +506,20 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
                 padding: 8px 12px;
                 min-width: 120px;
+            }
+
+            QGroupBox {
+                border: 1px solid #2e3945;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 10px;
+                font-weight: 650;
+            }
+
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
             }
 
             #footer {
