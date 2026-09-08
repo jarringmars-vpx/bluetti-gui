@@ -1,0 +1,14 @@
+# Normalize text files and store them with LF line endings
+* text=auto eol=lf
+
+# Windows command scripts should use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files - never perform line-ending conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
