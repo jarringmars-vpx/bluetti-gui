@@ -1,0 +1,100 @@
+{
+  "version": "0.2.3",
+  "notes": "Only assets whose BLUETTI CDN/product source was specifically verified during the image-library research pass are included. Models not listed here remain intentionally unresolved rather than being assigned a weak image.",
+  "assets": [
+    {
+      "model": "EL30V2",
+      "display_name": "Elite 30 V2",
+      "filename": "EL30V2.webp",
+      "url": "https://www.bluettipower.ph/cdn/shop/files/Elite_30_v2_1_b62b46e7-b70b-412a-be2f-0a027d328cc2.webp?v=1775013984",
+      "status": "selected",
+      "quality": "excellent",
+      "notes": "Dark grey, isolated, essentially straight-on. Primary reference master for dynamic display work."
+    },
+    {
+      "model": "AC50B",
+      "display_name": "AC50B",
+      "filename": "AC50B.webp",
+      "url": "https://checkout.bluettipower.com/cdn/shop/files/US_-4.webp?v=1719392084&width=1000",
+      "status": "selected",
+      "quality": "excellent",
+      "notes": "Dark grey, frontal, clean display/control geometry."
+    },
+    {
+      "model": "AC60",
+      "display_name": "AC60",
+      "filename": "AC60.png",
+      "url": "https://checkout.bluettipower.com/cdn/shop/files/0512-AC60_AC60.png?v=1735357521&width=1000",
+      "status": "selected",
+      "quality": "excellent",
+      "notes": "Straight-on product image selected instead of kit/battery/solar-panel compositions."
+    },
+    {
+      "model": "AC180",
+      "display_name": "AC180",
+      "filename": "AC180.png",
+      "url": "https://checkout.bluettipower.com/cdn/shop/files/AC180_cb56a69e-aa02-41ce-b2ed-965b8afa3cef.png?v=1753176697&width=1200",
+      "status": "selected",
+      "quality": "excellent",
+      "notes": "Dark grey, nearly straight-on; LCD and DC/Power/AC controls are very clear."
+    },
+    {
+      "model": "EL100V2",
+      "display_name": "Elite 100 V2",
+      "filename": "EL100V2.png",
+      "url": "https://cdn.shopify.com/s/files/1/0536/3390/8911/files/Elite_100_V2_1x_166a2116-7d3d-4f46-bdc4-dd516ee72c19.png?crop=center&height=1125&v=1770345760&width=1125",
+      "status": "selected",
+      "quality": "excellent",
+      "notes": "Clean version without award graphics; strong front-panel geometry."
+    },
+    {
+      "model": "AC180P",
+      "display_name": "AC180P",
+      "filename": "AC180P.png",
+      "url": "https://checkout.bluettipower.com/cdn/shop/files/AC180P_3x_6435aedb-2c8c-4c39-b7e2-229c5db2c71d.png?v=1753180673&width=1200",
+      "status": "selected",
+      "quality": "excellent",
+      "notes": "Premium-series front view; preserve factory markings."
+    },
+    {
+      "model": "AC200L",
+      "display_name": "AC200L",
+      "filename": "AC200L.png",
+      "url": "https://checkout.bluettipower.com/cdn/shop/files/AC200L-_-_1_a8415cb0-7878-4208-a8d4-4bed5dff8cf4.png?v=1768204021&width=1000",
+      "status": "selected",
+      "quality": "very_good",
+      "notes": "Standalone unit image; slightly more perspective than the best small-model assets."
+    },
+    {
+      "model": "AP300",
+      "display_name": "Apex 300",
+      "filename": "AP300.png",
+      "url": "https://checkout.bluettipower.com/cdn/shop/files/Apex_300.RGB_color_1x_dfa5ed92-8208-4e84-bd43-0ae4d1440513.png?v=1744770600&width=900",
+      "status": "selected",
+      "quality": "very_good",
+      "notes": "Official isolated Apex 300 asset; stored under BLE/backend model identifier AP300."
+    }
+  ],
+  "unresolved_models": [
+    "AC2A",
+    "AC2P",
+    "AC60P",
+    "AC70",
+    "AC70P",
+    "AC180T",
+    "AC200M",
+    "AC200PL",
+    "AC300",
+    "AC500",
+    "EB3A",
+    "EP500",
+    "EP500P",
+    "EP600",
+    "EP760",
+    "EP800",
+    "EP2000",
+    "Handsfree 1",
+    "PR30V2",
+    "PR100V2"
+  ]
+}

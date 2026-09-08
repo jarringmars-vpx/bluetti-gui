@@ -1,23 +1,41 @@
 from pathlib import Path
+from typing import Optional
 
-def resolve_model_image(model_name: str) -> Path | None:
+MODEL_IMAGE_DIR = Path("Images") / "Bluetti_Models"
+
+# Preserve BLUETTI's original CDN format whenever possible.
+# WEBP is checked first because many current BLUETTI masters use it.
+SUPPORTED_EXTENSIONS = (".webp", ".png", ".jpg", ".jpeg")
+
+
+def resolve_model_image(model: str) -> Optional[Path]:
     """
-    Resolve Images/Bluetti_Models/<exact model name>.png.
+    Resolve the best local image for a BLUETTI model.
 
-    Example:
-        EL30V2 -> Images/Bluetti_Models/EL30V2.png
+    The filename stem must match the backend model identifier exactly,
+    for example:
+        EL30V2.webp
+        AC180.png
+        AP300.png
 
-    If the exact image is missing, Unknown.png is used when present.
+    Falls back to Unknown.<ext> when available.
     """
-    project_root = Path(__file__).resolve().parents[1]
-    image_dir = project_root / "Images" / "Bluetti_Models"
+    if not model:
+        return _resolve_fallback()
 
-    exact = image_dir / f"{model_name}.png"
-    if exact.exists():
-        return exact
+    safe_model = model.strip()
 
-    fallback = image_dir / "Unknown.png"
-    if fallback.exists():
-        return fallback
+    for extension in SUPPORTED_EXTENSIONS:
+        candidate = MODEL_IMAGE_DIR / f"{safe_model}{extension}"
+        if candidate.is_file():
+            return candidate
 
+    return _resolve_fallback()
+
+
+def _resolve_fallback() -> Optional[Path]:
+    for extension in SUPPORTED_EXTENSIONS:
+        candidate = MODEL_IMAGE_DIR / f"Unknown{extension}"
+        if candidate.is_file():
+            return candidate
     return None
