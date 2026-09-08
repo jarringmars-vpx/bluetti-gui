@@ -169,7 +169,6 @@ class SevenSegmentRenderer:
 
 
 class DeviceVisualWidget(QWidget):
-    # Desired state emitted when the photographed button is clicked.
     dc_output_requested = Signal(bool)
     ac_output_requested = Signal(bool)
 
@@ -181,10 +180,16 @@ class DeviceVisualWidget(QWidget):
         self._state = DeviceVisualState()
         self._base_image = QImage()
         self._last_target_rect = QRectF()
+        self._controls_enabled = True
 
         self.setMinimumSize(360, 250)
         self.setAttribute(Qt.WA_OpaquePaintEvent, False)
         self.setMouseTracking(True)
+
+    def set_controls_enabled(self, enabled: bool):
+        self._controls_enabled = bool(enabled)
+        if not self._controls_enabled:
+            self.unsetCursor()
 
     def set_model(self, model: str, visual_profile: Optional[dict[str, Any]] = None):
         if model == self._model and visual_profile == self._profile:
@@ -273,10 +278,6 @@ class DeviceVisualWidget(QWidget):
         return QRectF(x, y, width, height)
 
     def _widget_point_to_normalized(self, x: float, y: float):
-        """
-        Convert a mouse position in widget coordinates into normalized
-        coordinates on the original model image.
-        """
         target = self._last_target_rect
 
         if target.isEmpty() or not target.contains(x, y):
@@ -291,7 +292,7 @@ class DeviceVisualWidget(QWidget):
         return nx, ny
 
     def _hit_button(self, x: float, y: float) -> Optional[str]:
-        if not self._profile:
+        if not self._controls_enabled or not self._profile:
             return None
 
         normalized = self._widget_point_to_normalized(x, y)
@@ -421,15 +422,12 @@ class DeviceVisualWidget(QWidget):
 
         min_green = int(spec.get("min_green", 38))
         dominance = int(spec.get("green_dominance", 6))
-
         symbol_green_threshold = int(spec.get("symbol_green_threshold", 150))
         symbol_luminance_threshold = int(
             spec.get("symbol_luminance_threshold", 95)
         )
-
         glow_neutral_scale = float(spec.get("glow_neutral_scale", 0.22))
         glow_residual_green = float(spec.get("glow_residual_green", 0.08))
-
         symbol_brightness = float(spec.get("symbol_brightness", 0.62))
         symbol_green_bias = int(spec.get("symbol_green_bias", 10))
 

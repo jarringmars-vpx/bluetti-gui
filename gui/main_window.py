@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from backends.mock_backend import MockBackend
+from backends.community_backend import CommunityBackend
 from gui.widgets.device_visual import DeviceVisualWidget, DeviceVisualState
 from services.runtime_estimator import RuntimeEstimator
 from services.settings_service import SettingsService
@@ -52,6 +52,18 @@ def load_tinted_svg(path: str, color: str, size: int = 22) -> QPixmap:
     painter.end()
 
     return pixmap
+
+
+def format_optional(value, decimals: int, unit: str) -> str:
+    if value is None:
+        return "--"
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "--"
+
+    return f"{number:.{decimals}f} {unit}"
 
 
 class MetricRow(QWidget):
@@ -113,7 +125,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.backend = MockBackend()
+        self.backend = CommunityBackend(model="EL30V2")
         self.settings_service = SettingsService()
         self.app_settings = self.settings_service.load()
         self.runtime_estimator = RuntimeEstimator()
@@ -125,11 +137,28 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_styles()
 
+        controls_enabled = bool(
+            getattr(self.backend, "supports_writes", False)
+        )
+
+        self.ac_button.setEnabled(controls_enabled)
+        self.dc_button.setEnabled(controls_enabled)
+        self.mode_combo.setEnabled(controls_enabled)
+        self.image_label.set_controls_enabled(controls_enabled)
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(1000)
 
         self.refresh()
+
+    def closeEvent(self, event):
+        try:
+            close = getattr(self.backend, "close", None)
+            if callable(close):
+                close()
+        finally:
+            super().closeEvent(event)
 
     def _icon(self, name: str) -> str:
         return f"Images/Icons/{name}.svg"
@@ -161,7 +190,7 @@ class MainWindow(QMainWindow):
         title_box.addWidget(app_title)
         title_box.addWidget(self.model_label)
 
-        self.connection_label = QLabel("● Connected")
+        self.connection_label = QLabel("● Disconnected")
         self.connection_label.setObjectName("connectionLabel")
 
         header.addLayout(title_box)
@@ -185,8 +214,6 @@ class MainWindow(QMainWindow):
             QSizePolicy.Expanding,
         )
 
-        # The photographed AC/DC buttons invoke the same backend controls as
-        # the regular dashboard buttons.
         self.image_label.dc_output_requested.connect(
             self._set_dc_output_from_image
         )
@@ -289,7 +316,7 @@ class MainWindow(QMainWindow):
             "Temperature",
             self._icon("temperature"),
         )
-        self.temperature_value = QLabel("-- °C")
+        self.temperature_value = QLabel("--")
         self.temperature_value.setObjectName("secondaryValue")
         thermal_group.layout_box.addWidget(self.temperature_value)
         thermal_group.layout_box.addStretch()
@@ -313,9 +340,7 @@ class MainWindow(QMainWindow):
         content.addWidget(right, 6)
         root.addLayout(content, 1)
 
-        self.footer = QLabel(
-            "Mock backend active — BLE connection will be added next."
-        )
+        self.footer = QLabel("Starting Community BLE backend...")
         self.footer.setObjectName("footer")
         root.addWidget(self.footer)
 
@@ -367,8 +392,8 @@ class MainWindow(QMainWindow):
         self.connection_label.style().unpolish(self.connection_label)
         self.connection_label.style().polish(self.connection_label)
 
-        self.soc_value.setText(f"{t.soc}%")
-        self.soc_bar.setValue(t.soc)
+        self.soc_value.setText(f"{t.soc}%" if t.connected else "--%")
+        self.soc_bar.setValue(t.soc if t.connected else 0)
 
         total_output_watts = (
             max(0, t.ac_output_power)
@@ -379,33 +404,53 @@ class MainWindow(QMainWindow):
             + max(0, t.dc_input_power)
         )
 
-        self.runtime_estimator.add_output_sample(total_output_watts)
+        if t.connected:
+            self.runtime_estimator.add_output_sample(total_output_watts)
 
-        capacity_wh = self._capacity_for_model(t.model)
+            capacity_wh = self._capacity_for_model(t.model)
+            estimate = self.runtime_estimator.estimate_minutes(
+                capacity_wh=capacity_wh,
+                soc_percent=t.soc,
+                current_output_watts=total_output_watts,
+                method=self.app_settings.runtime_method,
+                average_minutes=self.app_settings.average_minutes,
+            )
+            self.runtime_value.setText(
+                self.runtime_estimator.format_minutes(estimate)
+            )
+        else:
+            self.runtime_value.setText("--")
 
-        estimate = self.runtime_estimator.estimate_minutes(
-            capacity_wh=capacity_wh,
-            soc_percent=t.soc,
-            current_output_watts=total_output_watts,
-            method=self.app_settings.runtime_method,
-            average_minutes=self.app_settings.average_minutes,
+        self.ac_input_row.set_value(
+            f"{t.ac_input_power:.0f} W" if t.connected else "--"
+        )
+        self.ac_output_row.set_value(
+            f"{t.ac_output_power:.0f} W" if t.connected else "--"
         )
 
-        self.runtime_value.setText(
-            self.runtime_estimator.format_minutes(estimate)
+        self.dc_input_row.set_value(
+            f"{t.dc_input_power:.0f} W" if t.connected else "--"
+        )
+        self.dc_output_row.set_value(
+            f"{t.dc_output_power:.0f} W" if t.connected else "--"
         )
 
-        self.ac_input_row.set_value(f"{t.ac_input_power} W")
-        self.ac_output_row.set_value(f"{t.ac_output_power} W")
+        self.battery_voltage_row.set_value(
+            format_optional(t.battery_voltage, 2, "V")
+            if t.connected else "--"
+        )
+        self.battery_current_row.set_value(
+            format_optional(t.battery_current, 1, "A")
+            if t.connected else "--"
+        )
+        self.battery_flow_row.set_value(
+            t.battery_flow if t.connected else "--"
+        )
 
-        self.dc_input_row.set_value(f"{t.dc_input_power} W")
-        self.dc_output_row.set_value(f"{t.dc_output_power} W")
-
-        self.battery_voltage_row.set_value(f"{t.battery_voltage:.2f} V")
-        self.battery_current_row.set_value(f"{t.battery_current:.1f} A")
-        self.battery_flow_row.set_value(t.battery_flow)
-
-        self.temperature_value.setText(f"{t.temperature_c:.1f} °C")
+        self.temperature_value.setText(
+            format_optional(t.temperature_c, 1, "°C")
+            if t.connected else "--"
+        )
 
         self.ac_button.blockSignals(True)
         self.ac_button.setChecked(t.ac_output_enabled)
@@ -433,13 +478,23 @@ class MainWindow(QMainWindow):
 
         self.image_label.set_state(
             DeviceVisualState(
-                soc=t.soc,
-                input_watts=int(round(total_input_watts)),
-                output_watts=int(round(total_output_watts)),
+                soc=t.soc if t.connected else 0,
+                input_watts=int(round(total_input_watts))
+                if t.connected else 0,
+                output_watts=int(round(total_output_watts))
+                if t.connected else 0,
                 time_remaining=self.runtime_value.text(),
                 dc_output_enabled=t.dc_output_enabled,
                 ac_output_enabled=t.ac_output_enabled,
                 power_enabled=t.connected,
+            )
+        )
+
+        self.footer.setText(
+            getattr(
+                self.backend,
+                "status_message",
+                "Community BLE backend",
             )
         )
 
@@ -577,6 +632,25 @@ class MainWindow(QMainWindow):
                 border-color: #2da870;
             }}
 
+            /*
+             * Live Community telemetry is read-only for now, so these
+             * buttons are disabled. Qt's :disabled rule has higher visual
+             * priority than the generic :checked rule. Give the combined
+             * checked+disabled state its own ON styling so live state remains
+             * visible even though clicking is disabled.
+             */
+            QPushButton#stateButton:checked:disabled {{
+                background: #166f4b;
+                color: #d9f5e7;
+                border-color: #2da870;
+            }}
+
+            QPushButton#stateButton:disabled {{
+                background: #252b32;
+                color: #77818b;
+                border-color: #303840;
+            }}
+
             QPushButton {{
                 background: #2b3540;
                 border: 1px solid #3b4855;
@@ -590,6 +664,11 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
                 padding: 8px 12px;
                 min-width: 120px;
+            }}
+
+            QComboBox:disabled {{
+                color: #77818b;
+                background: #252b32;
             }}
 
             QGroupBox {{
