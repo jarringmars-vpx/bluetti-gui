@@ -2,81 +2,93 @@ MODEL_NAME = "EL30V2"
 DISPLAY_NAME = "Elite 30 V2"
 CAPACITY_WH = 288.0
 
-# Geometry is normalized to the selected 2000x2000 official BLUETTI
-# dark-grey straight-on EL30V2 master image.
+# Digital-twin visual profile for the selected 2000x2000 EL30V2 render base.
 #
-# v0.2.5 retains the first calibration pass. Fine positioning can be adjusted
-# here without changing the reusable DeviceVisualWidget.
+# All coordinates are normalized to source-image dimensions, allowing the same
+# profile to remain valid regardless of how large the widget is displayed.
 VISUAL_PROFILE = {
+    "render_image": "EL30V2_render.png",
+
     "display": {
+        "digit_color": "#F4FBFF",
+
         "fields": {
+            # Existing permanent INPUT/W label remains in the image.
+            # Only the live number is painted beneath it.
             "input_watts": {
-                "x": 0.428,
-                "y": 0.348,
-                "width": 0.057,
-                "height": 0.044,
-                "font_ratio": 0.024,
-                "background": "#07100d",
-                "background_alpha": 238,
-                "color": "#e8fbff",
-            },
-            "soc": {
-                "x": 0.487,
-                "y": 0.338,
-                "width": 0.064,
+                "x": 0.382,
+                "y": 0.350,
+                "width": 0.071,
                 "height": 0.052,
-                "font_ratio": 0.031,
-                "background": "#07100d",
-                "background_alpha": 238,
-                "color": "#e8fbff",
+                "digit_height_ratio": 0.86,
+                "spacing_ratio": 0.10,
             },
+
+            # SOC sits inside the center of the blue circular gauge.
+            "soc": {
+                "x": 0.469,
+                "y": 0.346,
+                "width": 0.067,
+                "height": 0.060,
+                "digit_height_ratio": 0.93,
+                "spacing_ratio": 0.10,
+            },
+
+            # Existing permanent OUTPUT/W label remains in the image.
             "output_watts": {
-                "x": 0.551,
-                "y": 0.348,
-                "width": 0.060,
-                "height": 0.044,
-                "font_ratio": 0.024,
-                "background": "#07100d",
-                "background_alpha": 238,
-                "color": "#e8fbff",
+                "x": 0.552,
+                "y": 0.350,
+                "width": 0.071,
+                "height": 0.052,
+                "digit_height_ratio": 0.86,
+                "spacing_ratio": 0.10,
             },
+
+            # Runtime is centered below the SOC value.
             "time_remaining": {
-                "x": 0.492,
-                "y": 0.390,
-                "width": 0.055,
-                "height": 0.027,
-                "font_ratio": 0.014,
-                "background": "#07100d",
-                "background_alpha": 238,
-                "color": "#d9f8ff",
+                "x": 0.449,
+                "y": 0.402,
+                "width": 0.107,
+                "height": 0.031,
+                "font_ratio": 0.0175,
             },
-        }
+        },
     },
 
-    "indicators": {
+    # Tight button rectangles. ON uses the original photographed green pixels.
+    # OFF selectively darkens only green pixels inside the corresponding area.
+    "buttons": {
         "dc_output": {
-            "x": 0.389,
-            "y": 0.475,
-            "radius": 0.014,
-            "color": "#38ff70",
-            "alpha": 80,
-            "core_alpha": 120,
+            "x": 0.359,
+            "y": 0.448,
+            "width": 0.060,
+            "height": 0.064,
+            "min_green": 55,
+            "green_dominance": 12,
+            "off_brightness_scale": 0.38,
+            "off_green_scale": 0.48,
         },
+
         "power": {
-            "x": 0.486,
-            "y": 0.475,
-            "radius": 0.014,
-            "color": "#38ff70",
-            "alpha": 80,
-            "core_alpha": 120,
+            "x": 0.456,
+            "y": 0.448,
+            "width": 0.060,
+            "height": 0.064,
+            "min_green": 55,
+            "green_dominance": 12,
+            "off_brightness_scale": 0.38,
+            "off_green_scale": 0.48,
         },
+
         "ac_output": {
-            "x": 0.581,
-            "y": 0.475,
-            "radius": 0.014,
-            "color": "#38ff70",
-            "alpha": 80,
-            "core_alpha": 120,
+            "x": 0.551,
+            "y": 0.448,
+            "width": 0.060,
+            "height": 0.064,
+            "min_green": 55,
+            "green_dominance": 12,
+            "off_brightness_scale": 0.38,
+            "off_green_scale": 0.48,
         },
     },
 }
