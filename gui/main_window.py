@@ -18,29 +18,25 @@ from PySide6.QtWidgets import (
 )
 
 from backends.mock_backend import MockBackend
-from devices.image_resolver import resolve_model_image
+from gui.widgets.device_visual import DeviceVisualWidget, DeviceVisualState
 from services.runtime_estimator import RuntimeEstimator
 from services.settings_service import SettingsService
 from gui.settings_window import SettingsWindow
+from devices.definitions.EL30V2 import (
+    CAPACITY_WH as EL30V2_CAPACITY_WH,
+    VISUAL_PROFILE as EL30V2_VISUAL_PROFILE,
+)
 
-from devices.definitions.EL30V2 import CAPACITY_WH as EL30V2_CAPACITY_WH
 
-
-# One application accent used for panel titles and their icons.
 PANEL_ACCENT = "#62B6DF"
 
 
 def load_tinted_svg(path: str, color: str, size: int = 22) -> QPixmap:
-    """
-    Load an SVG and recolor its light source artwork in memory.
-    The original SVG file is not modified.
-    """
     try:
         svg_text = Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return QPixmap()
 
-    # v0.2.1 icon assets use this neutral light color for stroke/fill.
     svg_text = svg_text.replace("#dce5ee", color)
     svg_text = svg_text.replace("#DCE5EE", color)
 
@@ -110,8 +106,6 @@ class InfoGroup(QFrame):
         title_row.addStretch()
 
         self.layout_box.addLayout(title_row)
-
-        # User-selected spacing between the panel heading and its controls.
         self.layout_box.addSpacing(16)
 
 
@@ -179,18 +173,14 @@ class MainWindow(QMainWindow):
         content = QHBoxLayout()
         content.setSpacing(18)
 
-        # LEFT PANEL: image, SOC, Time Remaining
         left = QFrame()
         left.setObjectName("panel")
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(18, 18, 18, 18)
         left_layout.setSpacing(12)
 
-        self.image_label = QLabel("No model image")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(360, 250)
+        self.image_label = DeviceVisualWidget()
         self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.image_label.setObjectName("deviceImage")
 
         soc_caption = QLabel("Battery State of Charge")
         soc_caption.setObjectName("sectionLabel")
@@ -222,7 +212,6 @@ class MainWindow(QMainWindow):
 
         content.addWidget(left, 4)
 
-        # RIGHT PANEL
         right = QFrame()
         right.setObjectName("panel")
         right_layout = QVBoxLayout(right)
@@ -233,7 +222,6 @@ class MainWindow(QMainWindow):
         top_grid.setHorizontalSpacing(14)
         top_grid.setVerticalSpacing(14)
 
-        # AC group
         ac_group = InfoGroup("AC", self._icon("ac"))
         self.ac_button = QPushButton("AC OUTPUT")
         self.ac_button.setCheckable(True)
@@ -248,7 +236,6 @@ class MainWindow(QMainWindow):
         ac_group.layout_box.addWidget(self.ac_output_row)
         ac_group.layout_box.addStretch()
 
-        # DC group
         dc_group = InfoGroup("DC", self._icon("dc"))
         self.dc_button = QPushButton("DC OUTPUT")
         self.dc_button.setCheckable(True)
@@ -263,7 +250,6 @@ class MainWindow(QMainWindow):
         dc_group.layout_box.addWidget(self.dc_output_row)
         dc_group.layout_box.addStretch()
 
-        # Battery group
         battery_group = InfoGroup("Battery", self._icon("battery"))
         self.battery_voltage_row = MetricRow("Voltage")
         self.battery_current_row = MetricRow("Current")
@@ -332,36 +318,8 @@ class MainWindow(QMainWindow):
         self.backend.set_charging_mode(mode)
 
     def _load_model_image(self, model: str):
-        path = resolve_model_image(model)
-
-        if path is None:
-            self.image_label.setPixmap(QPixmap())
-            self.image_label.setText(
-                f"{model}\n\nAdd:\nImages/Bluetti_Models/{model}.png"
-            )
-            return
-
-        pixmap = QPixmap(str(path))
-
-        if pixmap.isNull():
-            self.image_label.setPixmap(QPixmap())
-            self.image_label.setText(f"Unable to load:\n{path.name}")
-            return
-
-        scaled = pixmap.scaled(
-            self.image_label.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-
-        self.image_label.setText("")
-        self.image_label.setPixmap(scaled)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-
-        if hasattr(self, "current_model"):
-            self._load_model_image(self.current_model)
+        profile = EL30V2_VISUAL_PROFILE if model == "EL30V2" else None
+        self.image_label.set_model(model, profile)
 
     def _capacity_for_model(self, model: str) -> float:
         if model == "EL30V2":
@@ -385,6 +343,8 @@ class MainWindow(QMainWindow):
         self.soc_bar.setValue(t.soc)
 
         total_output_watts = max(0, t.ac_output_power) + max(0, t.dc_output_power)
+        total_input_watts = max(0, t.ac_input_power) + max(0, t.dc_input_power)
+
         self.runtime_estimator.add_output_sample(total_output_watts)
 
         capacity_wh = self._capacity_for_model(t.model)
@@ -432,6 +392,18 @@ class MainWindow(QMainWindow):
         self.mode_combo.blockSignals(False)
 
         self._load_model_image(t.model)
+
+        self.image_label.set_state(
+            DeviceVisualState(
+                soc=t.soc,
+                input_watts=int(round(total_input_watts)),
+                output_watts=int(round(total_output_watts)),
+                time_remaining=self.runtime_value.text(),
+                dc_output_enabled=t.dc_output_enabled,
+                ac_output_enabled=t.ac_output_enabled,
+                power_enabled=t.connected,
+            )
+        )
 
     def _apply_styles(self):
         self.setStyleSheet(f"""
@@ -537,13 +509,6 @@ class MainWindow(QMainWindow):
                 background: transparent;
                 font-size: 24px;
                 font-weight: 700;
-            }}
-
-            #deviceImage {{
-                color: #8492a0;
-                border: 1px dashed #394653;
-                border-radius: 10px;
-                padding: 10px;
             }}
 
             QProgressBar {{
