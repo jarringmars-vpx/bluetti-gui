@@ -243,7 +243,6 @@ class DeviceVisualWidget(QWidget):
 
     def _scaled_target_rect(self, pixmap: QPixmap) -> QRectF:
         available = self.rect().adjusted(8, 8, -8, -8)
-
         source_w = pixmap.width()
         source_h = pixmap.height()
 
@@ -257,10 +256,8 @@ class DeviceVisualWidget(QWidget):
 
         width = source_w * scale
         height = source_h * scale
-
         x = available.x() + (available.width() - width) / 2
         y = available.y() + (available.height() - height) / 2
-
         return QRectF(x, y, width, height)
 
     def _paint_lcd_values(self, pixmap: QPixmap):
@@ -333,6 +330,17 @@ class DeviceVisualWidget(QWidget):
                 self._mute_green_region(image, spec)
 
     def _mute_green_region(self, image: QImage, spec: dict[str, Any]):
+        """
+        Turn an illuminated photographed button into an OFF-state button.
+
+        Two green ranges are treated differently:
+        - Bright/high-luminance green pixels are assumed to be the printed
+          symbol/letters. They are desaturated to a readable dim gray-green.
+        - Mid/darker green pixels are assumed to be illumination/glow and are
+          muted much more aggressively.
+
+        This preserves symbol readability while still removing the lit look.
+        """
         width = image.width()
         height = image.height()
 
@@ -341,38 +349,56 @@ class DeviceVisualWidget(QWidget):
         x1 = min(width, int((spec["x"] + spec["width"]) * width))
         y1 = min(height, int((spec["y"] + spec["height"]) * height))
 
-        min_green = int(spec.get("min_green", 40))
+        min_green = int(spec.get("min_green", 38))
         dominance = int(spec.get("green_dominance", 6))
-        neutral_scale = float(spec.get("off_neutral_scale", 0.30))
-        residual_green = float(spec.get("off_residual_green", 0.12))
+
+        symbol_green_threshold = int(spec.get("symbol_green_threshold", 150))
+        symbol_luminance_threshold = int(spec.get("symbol_luminance_threshold", 95))
+
+        glow_neutral_scale = float(spec.get("glow_neutral_scale", 0.22))
+        glow_residual_green = float(spec.get("glow_residual_green", 0.08))
+
+        symbol_brightness = float(spec.get("symbol_brightness", 0.62))
+        symbol_green_bias = int(spec.get("symbol_green_bias", 10))
 
         for y in range(y0, y1):
             for x in range(x0, x1):
                 c = image.pixelColor(x, y)
                 r, g, b, a = c.red(), c.green(), c.blue(), c.alpha()
 
-                if (
+                if not (
                     g >= min_green
                     and g >= r + dominance
                     and g >= b + dominance
                 ):
-                    # Convert the illuminated green toward a dark neutral tone.
-                    # Brightness variation is preserved so the symbol and texture
-                    # remain visible rather than becoming a flat painted patch.
-                    luminance = int((r + g + b) / 3)
-                    base = int(luminance * neutral_scale)
+                    continue
 
+                luminance = int(0.2126 * r + 0.7152 * g + 0.0722 * b)
+
+                if (
+                    g >= symbol_green_threshold
+                    and luminance >= symbol_luminance_threshold
+                ):
+                    # Bright symbol/letter pixel: keep it readable but remove
+                    # the neon-green illuminated appearance.
+                    base = int(luminance * symbol_brightness)
                     nr = base
-                    ng = int(base + g * residual_green)
+                    ng = min(255, base + symbol_green_bias)
+                    nb = base
+                else:
+                    # Glow/background green: strongly mute toward dark neutral.
+                    base = int(luminance * glow_neutral_scale)
+                    nr = base
+                    ng = int(base + g * glow_residual_green)
                     nb = base
 
-                    image.setPixelColor(
-                        x,
-                        y,
-                        QColor(
-                            max(0, min(255, nr)),
-                            max(0, min(255, ng)),
-                            max(0, min(255, nb)),
-                            a,
-                        ),
-                    )
+                image.setPixelColor(
+                    x,
+                    y,
+                    QColor(
+                        max(0, min(255, nr)),
+                        max(0, min(255, ng)),
+                        max(0, min(255, nb)),
+                        a,
+                    ),
+                )

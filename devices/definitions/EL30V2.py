@@ -9,10 +9,9 @@ VISUAL_PROFILE = {
         "digit_color": "#F4FBFF",
 
         "fields": {
-            # Maximized-view calibration:
-            # input moved slightly right and reduced a touch.
+            # v0.2.10 retains the v0.2.9 leftward LCD corrections.
             "input_watts": {
-                "x": 0.397,
+                "x": 0.388,
                 "y": 0.362,
                 "width": 0.052,
                 "height": 0.038,
@@ -22,9 +21,8 @@ VISUAL_PROFILE = {
                 "spacing_ratio": 0.09,
             },
 
-            # SOC moved slightly right/down and reduced.
             "soc": {
-                "x": 0.484,
+                "x": 0.470,
                 "y": 0.359,
                 "width": 0.039,
                 "height": 0.041,
@@ -34,9 +32,8 @@ VISUAL_PROFILE = {
                 "spacing_ratio": 0.09,
             },
 
-            # Output moved left noticeably toward the center gauge.
             "output_watts": {
-                "x": 0.548,
+                "x": 0.535,
                 "y": 0.362,
                 "width": 0.052,
                 "height": 0.038,
@@ -46,7 +43,6 @@ VISUAL_PROFILE = {
                 "spacing_ratio": 0.09,
             },
 
-            # Runtime was already close in v0.2.7; retain nearly the same fit.
             "time_remaining": {
                 "x": 0.456,
                 "y": 0.407,
@@ -63,10 +59,14 @@ VISUAL_PROFILE = {
             "y": 0.448,
             "width": 0.060,
             "height": 0.064,
-            "min_green": 40,
+            "min_green": 38,
             "green_dominance": 6,
-            "off_neutral_scale": 0.30,
-            "off_residual_green": 0.12,
+            "symbol_green_threshold": 150,
+            "symbol_luminance_threshold": 95,
+            "glow_neutral_scale": 0.22,
+            "glow_residual_green": 0.08,
+            "symbol_brightness": 0.62,
+            "symbol_green_bias": 10,
         },
 
         "power": {
@@ -74,10 +74,14 @@ VISUAL_PROFILE = {
             "y": 0.448,
             "width": 0.060,
             "height": 0.064,
-            "min_green": 40,
+            "min_green": 38,
             "green_dominance": 6,
-            "off_neutral_scale": 0.30,
-            "off_residual_green": 0.12,
+            "symbol_green_threshold": 150,
+            "symbol_luminance_threshold": 95,
+            "glow_neutral_scale": 0.22,
+            "glow_residual_green": 0.08,
+            "symbol_brightness": 0.62,
+            "symbol_green_bias": 10,
         },
 
         "ac_output": {
@@ -85,10 +89,14 @@ VISUAL_PROFILE = {
             "y": 0.448,
             "width": 0.060,
             "height": 0.064,
-            "min_green": 40,
+            "min_green": 38,
             "green_dominance": 6,
-            "off_neutral_scale": 0.30,
-            "off_residual_green": 0.12,
+            "symbol_green_threshold": 150,
+            "symbol_luminance_threshold": 95,
+            "glow_neutral_scale": 0.22,
+            "glow_residual_green": 0.08,
+            "symbol_brightness": 0.62,
+            "symbol_green_bias": 10,
         },
     },
 }
