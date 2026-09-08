@@ -11,7 +11,6 @@ from PySide6.QtGui import (
     QImage,
     QPainter,
     QPainterPath,
-    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import QWidget
@@ -34,13 +33,6 @@ class DeviceVisualState:
 
 
 class SevenSegmentRenderer:
-    """
-    Narrow vector LCD numeral renderer.
-
-    v0.2.7 deliberately uses slimmer strokes and narrower digits than v0.2.6
-    to better match the EL30V2's photographed LCD proportions.
-    """
-
     SEGMENTS = {
         "0": "abcdef",
         "1": "bc",
@@ -90,8 +82,8 @@ class SevenSegmentRenderer:
         rect: QRectF,
         digit_height_ratio: float = 0.80,
         digit_width_ratio: float = 0.40,
-        stroke_ratio: float = 0.072,
-        spacing_ratio: float = 0.11,
+        stroke_ratio: float = 0.068,
+        spacing_ratio: float = 0.10,
     ):
         digits = [ch for ch in str(text) if ch.isdigit()]
         if not digits:
@@ -100,7 +92,6 @@ class SevenSegmentRenderer:
         target_h = rect.height() * digit_height_ratio
         digit_w = target_h * digit_width_ratio
         spacing = digit_w * spacing_ratio
-
         total_w = digit_w * len(digits) + spacing * max(0, len(digits) - 1)
 
         if total_w > rect.width():
@@ -177,13 +168,8 @@ class SevenSegmentRenderer:
 
 
 class DeviceVisualWidget(QWidget):
-    """
-    Renders a model-specific digital twin without modifying source assets.
-    """
-
     def __init__(self, parent=None):
         super().__init__(parent)
-
         self._model = ""
         self._profile: Optional[dict[str, Any]] = None
         self._state = DeviceVisualState()
@@ -231,7 +217,6 @@ class DeviceVisualWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-
         painter.fillRect(self.rect(), QColor("#181e25"))
 
         if self._base_image.isNull():
@@ -312,8 +297,8 @@ class DeviceVisualWidget(QWidget):
                 rect,
                 digit_height_ratio=spec.get("digit_height_ratio", 0.80),
                 digit_width_ratio=spec.get("digit_width_ratio", 0.40),
-                stroke_ratio=spec.get("stroke_ratio", 0.072),
-                spacing_ratio=spec.get("spacing_ratio", 0.11),
+                stroke_ratio=spec.get("stroke_ratio", 0.068),
+                spacing_ratio=spec.get("spacing_ratio", 0.10),
             )
 
         runtime_spec = fields.get("time_remaining")
@@ -356,10 +341,10 @@ class DeviceVisualWidget(QWidget):
         x1 = min(width, int((spec["x"] + spec["width"]) * width))
         y1 = min(height, int((spec["y"] + spec["height"]) * height))
 
-        min_green = int(spec.get("min_green", 55))
-        dominance = int(spec.get("green_dominance", 12))
-        brightness_scale = float(spec.get("off_brightness_scale", 0.38))
-        green_scale = float(spec.get("off_green_scale", 0.48))
+        min_green = int(spec.get("min_green", 40))
+        dominance = int(spec.get("green_dominance", 6))
+        neutral_scale = float(spec.get("off_neutral_scale", 0.30))
+        residual_green = float(spec.get("off_residual_green", 0.12))
 
         for y in range(y0, y1):
             for x in range(x0, x1):
@@ -371,13 +356,23 @@ class DeviceVisualWidget(QWidget):
                     and g >= r + dominance
                     and g >= b + dominance
                 ):
+                    # Convert the illuminated green toward a dark neutral tone.
+                    # Brightness variation is preserved so the symbol and texture
+                    # remain visible rather than becoming a flat painted patch.
+                    luminance = int((r + g + b) / 3)
+                    base = int(luminance * neutral_scale)
+
+                    nr = base
+                    ng = int(base + g * residual_green)
+                    nb = base
+
                     image.setPixelColor(
                         x,
                         y,
                         QColor(
-                            max(0, min(255, int(r * brightness_scale))),
-                            max(0, min(255, int(g * green_scale))),
-                            max(0, min(255, int(b * brightness_scale))),
+                            max(0, min(255, nr)),
+                            max(0, min(255, ng)),
+                            max(0, min(255, nb)),
                             a,
                         ),
                     )

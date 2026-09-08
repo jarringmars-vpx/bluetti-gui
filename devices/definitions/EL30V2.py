@@ -9,43 +9,44 @@ VISUAL_PROFILE = {
         "digit_color": "#F4FBFF",
 
         "fields": {
-            # Left numeric field beneath INPUT W.
+            # Maximized-view calibration:
+            # input moved slightly right and reduced a touch.
             "input_watts": {
-                "x": 0.390,
-                "y": 0.361,
-                "width": 0.057,
-                "height": 0.039,
-                "digit_height_ratio": 0.78,
-                "digit_width_ratio": 0.40,
-                "stroke_ratio": 0.068,
-                "spacing_ratio": 0.10,
-            },
-
-            # Center SOC value inside the gauge.
-            "soc": {
-                "x": 0.479,
-                "y": 0.354,
-                "width": 0.043,
-                "height": 0.043,
-                "digit_height_ratio": 0.82,
-                "digit_width_ratio": 0.40,
-                "stroke_ratio": 0.068,
+                "x": 0.397,
+                "y": 0.362,
+                "width": 0.052,
+                "height": 0.038,
+                "digit_height_ratio": 0.76,
+                "digit_width_ratio": 0.39,
+                "stroke_ratio": 0.066,
                 "spacing_ratio": 0.09,
             },
 
-            # Right numeric field beneath OUTPUT W.
-            "output_watts": {
-                "x": 0.557,
-                "y": 0.361,
-                "width": 0.057,
-                "height": 0.039,
-                "digit_height_ratio": 0.78,
-                "digit_width_ratio": 0.40,
-                "stroke_ratio": 0.068,
-                "spacing_ratio": 0.10,
+            # SOC moved slightly right/down and reduced.
+            "soc": {
+                "x": 0.484,
+                "y": 0.359,
+                "width": 0.039,
+                "height": 0.041,
+                "digit_height_ratio": 0.80,
+                "digit_width_ratio": 0.39,
+                "stroke_ratio": 0.066,
+                "spacing_ratio": 0.09,
             },
 
-            # Runtime centered below SOC.
+            # Output moved left noticeably toward the center gauge.
+            "output_watts": {
+                "x": 0.548,
+                "y": 0.362,
+                "width": 0.052,
+                "height": 0.038,
+                "digit_height_ratio": 0.76,
+                "digit_width_ratio": 0.39,
+                "stroke_ratio": 0.066,
+                "spacing_ratio": 0.09,
+            },
+
+            # Runtime was already close in v0.2.7; retain nearly the same fit.
             "time_remaining": {
                 "x": 0.456,
                 "y": 0.407,
@@ -62,10 +63,10 @@ VISUAL_PROFILE = {
             "y": 0.448,
             "width": 0.060,
             "height": 0.064,
-            "min_green": 55,
-            "green_dominance": 12,
-            "off_brightness_scale": 0.38,
-            "off_green_scale": 0.48,
+            "min_green": 40,
+            "green_dominance": 6,
+            "off_neutral_scale": 0.30,
+            "off_residual_green": 0.12,
         },
 
         "power": {
@@ -73,10 +74,10 @@ VISUAL_PROFILE = {
             "y": 0.448,
             "width": 0.060,
             "height": 0.064,
-            "min_green": 55,
-            "green_dominance": 12,
-            "off_brightness_scale": 0.38,
-            "off_green_scale": 0.48,
+            "min_green": 40,
+            "green_dominance": 6,
+            "off_neutral_scale": 0.30,
+            "off_residual_green": 0.12,
         },
 
         "ac_output": {
@@ -84,10 +85,10 @@ VISUAL_PROFILE = {
             "y": 0.448,
             "width": 0.060,
             "height": 0.064,
-            "min_green": 55,
-            "green_dominance": 12,
-            "off_brightness_scale": 0.38,
-            "off_green_scale": 0.48,
+            "min_green": 40,
+            "green_dominance": 6,
+            "off_neutral_scale": 0.30,
+            "off_residual_green": 0.12,
         },
     },
 }
