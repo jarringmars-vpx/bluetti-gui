@@ -1,5 +1,8 @@
-from PySide6.QtCore import Qt, QTimer, QSize
-from PySide6.QtGui import QPixmap, QAction, QIcon
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer, QByteArray
+from PySide6.QtGui import QPixmap, QAction, QPainter
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -21,6 +24,38 @@ from services.settings_service import SettingsService
 from gui.settings_window import SettingsWindow
 
 from devices.definitions.EL30V2 import CAPACITY_WH as EL30V2_CAPACITY_WH
+
+
+# One application accent used for panel titles and their icons.
+PANEL_ACCENT = "#62B6DF"
+
+
+def load_tinted_svg(path: str, color: str, size: int = 22) -> QPixmap:
+    """
+    Load an SVG and recolor its light source artwork in memory.
+    The original SVG file is not modified.
+    """
+    try:
+        svg_text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return QPixmap()
+
+    # v0.2.1 icon assets use this neutral light color for stroke/fill.
+    svg_text = svg_text.replace("#dce5ee", color)
+    svg_text = svg_text.replace("#DCE5EE", color)
+
+    renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
+    if not renderer.isValid():
+        return QPixmap()
+
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+
+    return pixmap
 
 
 class MetricRow(QWidget):
@@ -63,16 +98,9 @@ class InfoGroup(QFrame):
         icon_label.setFixedSize(22, 22)
 
         if icon_path:
-            pixmap = QPixmap(icon_path)
+            pixmap = load_tinted_svg(icon_path, PANEL_ACCENT, 22)
             if not pixmap.isNull():
-                icon_label.setPixmap(
-                    pixmap.scaled(
-                        22,
-                        22,
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation,
-                    )
-                )
+                icon_label.setPixmap(pixmap)
 
         title_label = QLabel(title)
         title_label.setObjectName("groupTitle")
@@ -82,6 +110,8 @@ class InfoGroup(QFrame):
         title_row.addStretch()
 
         self.layout_box.addLayout(title_row)
+
+        # User-selected spacing between the panel heading and its controls.
         self.layout_box.addSpacing(16)
 
 
@@ -404,177 +434,177 @@ class MainWindow(QMainWindow):
         self._load_model_image(t.model)
 
     def _apply_styles(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget {{
                 background: #11151a;
                 color: #e9eef5;
                 font-family: Segoe UI, Arial, sans-serif;
                 font-size: 14px;
-            }
+            }}
 
-            QMenuBar {
+            QMenuBar {{
                 background: #11151a;
                 color: #e9eef5;
-            }
+            }}
 
-            QMenuBar::item:selected, QMenu::item:selected {
+            QMenuBar::item:selected, QMenu::item:selected {{
                 background: #2b3540;
-            }
+            }}
 
-            QMenu {
+            QMenu {{
                 background: #181e25;
                 color: #e9eef5;
                 border: 1px solid #2a333d;
-            }
+            }}
 
-            #appTitle {
+            #appTitle {{
                 font-size: 26px;
                 font-weight: 700;
-            }
+            }}
 
-            #modelLabel {
+            #modelLabel {{
                 color: #9ba9b8;
                 font-size: 16px;
-            }
+            }}
 
-            #connectionLabel {
+            #connectionLabel {{
                 font-weight: 600;
                 color: #ef6a6a;
-            }
+            }}
 
-            #connectionLabel[connected="true"] {
+            #connectionLabel[connected="true"] {{
                 color: #59d18c;
-            }
+            }}
 
-            #panel {
+            #panel {{
                 background: #181e25;
                 border: 1px solid #2a333d;
                 border-radius: 14px;
-            }
+            }}
 
-            #infoGroup {
+            #infoGroup {{
                 background: #202731;
                 border: 1px solid #2e3945;
                 border-radius: 10px;
-            }
+            }}
 
-            #groupIcon {
+            #groupIcon {{
                 background: transparent;
                 border: none;
-            }
+            }}
 
-            #groupTitle {
+            #groupTitle {{
                 background: transparent;
                 font-size: 17px;
                 font-weight: 700;
-                color: #62B6DF;
-            }
+                color: {PANEL_ACCENT};
+            }}
 
             #metricRow,
             #metricRowLabel,
-            #metricRowValue {
+            #metricRowValue {{
                 background: transparent;
                 border: none;
-            }
+            }}
 
-            #metricRowLabel {
+            #metricRowLabel {{
                 color: #9ba9b8;
-            }
+            }}
 
-            #metricRowValue {
+            #metricRowValue {{
                 font-size: 17px;
                 font-weight: 650;
                 color: #e9eef5;
-            }
+            }}
 
-            #sectionLabel {
+            #sectionLabel {{
                 color: #c8d2dc;
                 font-size: 14px;
                 font-weight: 650;
-            }
+            }}
 
-            #socValue {
+            #socValue {{
                 font-size: 46px;
                 font-weight: 750;
-            }
+            }}
 
-            #runtimeValue {
+            #runtimeValue {{
                 font-size: 28px;
                 font-weight: 700;
-            }
+            }}
 
-            #secondaryValue {
+            #secondaryValue {{
                 background: transparent;
                 font-size: 24px;
                 font-weight: 700;
-            }
+            }}
 
-            #deviceImage {
+            #deviceImage {{
                 color: #8492a0;
                 border: 1px dashed #394653;
                 border-radius: 10px;
                 padding: 10px;
-            }
+            }}
 
-            QProgressBar {
+            QProgressBar {{
                 background: #252d36;
                 border: none;
                 border-radius: 9px;
-            }
+            }}
 
-            QProgressBar::chunk {
+            QProgressBar::chunk {{
                 background: #52c7ff;
                 border-radius: 9px;
-            }
+            }}
 
-            QPushButton#stateButton {
+            QPushButton#stateButton {{
                 background: #2b3540;
                 border: 1px solid #3b4855;
                 border-radius: 8px;
                 padding: 12px 16px;
                 font-weight: 700;
-            }
+            }}
 
-            QPushButton#stateButton:hover {
+            QPushButton#stateButton:hover {{
                 background: #34404d;
-            }
+            }}
 
-            QPushButton#stateButton:checked {
+            QPushButton#stateButton:checked {{
                 background: #166f4b;
                 border-color: #2da870;
-            }
+            }}
 
-            QPushButton {
+            QPushButton {{
                 background: #2b3540;
                 border: 1px solid #3b4855;
                 border-radius: 8px;
                 padding: 9px 14px;
-            }
+            }}
 
-            QComboBox {
+            QComboBox {{
                 background: #2b3540;
                 border: 1px solid #3b4855;
                 border-radius: 8px;
                 padding: 8px 12px;
                 min-width: 120px;
-            }
+            }}
 
-            QGroupBox {
+            QGroupBox {{
                 border: 1px solid #2e3945;
                 border-radius: 8px;
                 margin-top: 12px;
                 padding-top: 10px;
                 font-weight: 650;
-            }
+            }}
 
-            QGroupBox::title {
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 5px;
-            }
+            }}
 
-            #footer {
+            #footer {{
                 color: #788594;
                 font-size: 12px;
-            }
+            }}
         """)
