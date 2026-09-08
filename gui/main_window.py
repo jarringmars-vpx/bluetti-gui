@@ -1,5 +1,5 @@
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap, QAction
+from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtGui import QPixmap, QAction, QIcon
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -19,12 +19,14 @@ from devices.image_resolver import resolve_model_image
 from services.runtime_estimator import RuntimeEstimator
 from services.settings_service import SettingsService
 from gui.settings_window import SettingsWindow
+
 from devices.definitions.EL30V2 import CAPACITY_WH as EL30V2_CAPACITY_WH
 
 
 class MetricRow(QWidget):
     def __init__(self, label: str, value: str = "--", parent=None):
         super().__init__(parent)
+        self.setObjectName("metricRow")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -45,7 +47,7 @@ class MetricRow(QWidget):
 
 
 class InfoGroup(QFrame):
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, icon_path: str | None = None, parent=None):
         super().__init__(parent)
         self.setObjectName("infoGroup")
 
@@ -53,9 +55,34 @@ class InfoGroup(QFrame):
         self.layout_box.setContentsMargins(16, 14, 16, 14)
         self.layout_box.setSpacing(10)
 
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+
+        icon_label = QLabel()
+        icon_label.setObjectName("groupIcon")
+        icon_label.setFixedSize(22, 22)
+
+        if icon_path:
+            pixmap = QPixmap(icon_path)
+            if not pixmap.isNull():
+                icon_label.setPixmap(
+                    pixmap.scaled(
+                        22,
+                        22,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+
         title_label = QLabel(title)
         title_label.setObjectName("groupTitle")
-        self.layout_box.addWidget(title_label)
+
+        title_row.addWidget(icon_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch()
+
+        self.layout_box.addLayout(title_row)
+        self.layout_box.addSpacing(16)
 
 
 class MainWindow(QMainWindow):
@@ -79,6 +106,9 @@ class MainWindow(QMainWindow):
         self.timer.start(1000)
 
         self.refresh()
+
+    def _icon(self, name: str) -> str:
+        return f"Images/Icons/{name}.svg"
 
     def _build_menu(self):
         settings_action = QAction("Settings", self)
@@ -162,7 +192,7 @@ class MainWindow(QMainWindow):
 
         content.addWidget(left, 4)
 
-        # RIGHT PANEL: AC, DC, Battery + secondary information
+        # RIGHT PANEL
         right = QFrame()
         right.setObjectName("panel")
         right_layout = QVBoxLayout(right)
@@ -173,7 +203,8 @@ class MainWindow(QMainWindow):
         top_grid.setHorizontalSpacing(14)
         top_grid.setVerticalSpacing(14)
 
-        ac_group = InfoGroup("AC")
+        # AC group
+        ac_group = InfoGroup("AC", self._icon("ac"))
         self.ac_button = QPushButton("AC OUTPUT")
         self.ac_button.setCheckable(True)
         self.ac_button.setObjectName("stateButton")
@@ -187,7 +218,8 @@ class MainWindow(QMainWindow):
         ac_group.layout_box.addWidget(self.ac_output_row)
         ac_group.layout_box.addStretch()
 
-        dc_group = InfoGroup("DC")
+        # DC group
+        dc_group = InfoGroup("DC", self._icon("dc"))
         self.dc_button = QPushButton("DC OUTPUT")
         self.dc_button.setCheckable(True)
         self.dc_button.setObjectName("stateButton")
@@ -201,7 +233,8 @@ class MainWindow(QMainWindow):
         dc_group.layout_box.addWidget(self.dc_output_row)
         dc_group.layout_box.addStretch()
 
-        battery_group = InfoGroup("Battery")
+        # Battery group
+        battery_group = InfoGroup("Battery", self._icon("battery"))
         self.battery_voltage_row = MetricRow("Voltage")
         self.battery_current_row = MetricRow("Current")
         self.battery_flow_row = MetricRow("State")
@@ -224,13 +257,13 @@ class MainWindow(QMainWindow):
         secondary = QHBoxLayout()
         secondary.setSpacing(14)
 
-        thermal_group = InfoGroup("Temperature")
+        thermal_group = InfoGroup("Temperature", self._icon("temperature"))
         self.temperature_value = QLabel("-- °C")
         self.temperature_value.setObjectName("secondaryValue")
         thermal_group.layout_box.addWidget(self.temperature_value)
         thermal_group.layout_box.addStretch()
 
-        charging_group = InfoGroup("Charging Mode")
+        charging_group = InfoGroup("Charging Mode", self._icon("charging_mode"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Standard", "Silent", "Turbo"])
         self.mode_combo.currentTextChanged.connect(self._set_mode)
@@ -303,7 +336,6 @@ class MainWindow(QMainWindow):
     def _capacity_for_model(self, model: str) -> float:
         if model == "EL30V2":
             return EL30V2_CAPACITY_WH
-
         return 0.0
 
     def refresh(self):
@@ -326,6 +358,7 @@ class MainWindow(QMainWindow):
         self.runtime_estimator.add_output_sample(total_output_watts)
 
         capacity_wh = self._capacity_for_model(t.model)
+
         estimate = self.runtime_estimator.estimate_minutes(
             capacity_wh=capacity_wh,
             soc_percent=t.soc,
@@ -333,7 +366,10 @@ class MainWindow(QMainWindow):
             method=self.app_settings.runtime_method,
             average_minutes=self.app_settings.average_minutes,
         )
-        self.runtime_value.setText(self.runtime_estimator.format_minutes(estimate))
+
+        self.runtime_value.setText(
+            self.runtime_estimator.format_minutes(estimate)
+        )
 
         self.ac_input_row.set_value(f"{t.ac_input_power} W")
         self.ac_output_row.set_value(f"{t.ac_output_power} W")
@@ -422,10 +458,23 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
             }
 
+            #groupIcon {
+                background: transparent;
+                border: none;
+            }
+
             #groupTitle {
+                background: transparent;
                 font-size: 17px;
                 font-weight: 700;
-                color: #dce5ee;
+                color: #62B6DF;
+            }
+
+            #metricRow,
+            #metricRowLabel,
+            #metricRowValue {
+                background: transparent;
+                border: none;
             }
 
             #metricRowLabel {
@@ -435,6 +484,7 @@ class MainWindow(QMainWindow):
             #metricRowValue {
                 font-size: 17px;
                 font-weight: 650;
+                color: #e9eef5;
             }
 
             #sectionLabel {
@@ -454,6 +504,7 @@ class MainWindow(QMainWindow):
             }
 
             #secondaryValue {
+                background: transparent;
                 font-size: 24px;
                 font-weight: 700;
             }
