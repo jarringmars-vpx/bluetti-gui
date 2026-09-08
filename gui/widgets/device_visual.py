@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QRectF, QPointF
+from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -35,15 +35,14 @@ class DeviceVisualState:
 
 class SevenSegmentRenderer:
     """
-    Small vector renderer used for the large LCD numerals.
+    Narrow vector LCD numeral renderer.
 
-    BLUETTI's display numerals are narrow, block-like digital characters.
-    Rendering them as vectors avoids depending on a specific installed font
-    and gives consistent results on Windows and Linux.
+    v0.2.7 deliberately uses slimmer strokes and narrower digits than v0.2.6
+    to better match the EL30V2's photographed LCD proportions.
     """
 
     SEGMENTS = {
-        "0": "abcedf",
+        "0": "abcdef",
         "1": "bc",
         "2": "abdeg",
         "3": "abcdg",
@@ -60,7 +59,7 @@ class SevenSegmentRenderer:
 
     @staticmethod
     def _h_segment(x, y, length, thickness):
-        cut = thickness * 0.42
+        cut = thickness * 0.34
         path = QPainterPath()
         path.moveTo(x + cut, y)
         path.lineTo(x + length - cut, y)
@@ -73,7 +72,7 @@ class SevenSegmentRenderer:
 
     @staticmethod
     def _v_segment(x, y, length, thickness):
-        cut = thickness * 0.42
+        cut = thickness * 0.34
         path = QPainterPath()
         path.moveTo(x, y + cut)
         path.lineTo(x + thickness / 2, y)
@@ -89,28 +88,32 @@ class SevenSegmentRenderer:
         painter: QPainter,
         text: str,
         rect: QRectF,
-        digit_height_ratio: float = 0.94,
-        spacing_ratio: float = 0.13,
+        digit_height_ratio: float = 0.80,
+        digit_width_ratio: float = 0.40,
+        stroke_ratio: float = 0.072,
+        spacing_ratio: float = 0.11,
     ):
         digits = [ch for ch in str(text) if ch.isdigit()]
         if not digits:
             return
 
         target_h = rect.height() * digit_height_ratio
-        digit_w = target_h * 0.53
+        digit_w = target_h * digit_width_ratio
         spacing = digit_w * spacing_ratio
+
         total_w = digit_w * len(digits) + spacing * max(0, len(digits) - 1)
 
-        scale = min(1.0, rect.width() / total_w if total_w else 1.0)
-        target_h *= scale
-        digit_w *= scale
-        spacing *= scale
-        total_w = digit_w * len(digits) + spacing * max(0, len(digits) - 1)
+        if total_w > rect.width():
+            scale = rect.width() / total_w
+            target_h *= scale
+            digit_w *= scale
+            spacing *= scale
+            total_w = digit_w * len(digits) + spacing * max(0, len(digits) - 1)
 
         start_x = rect.center().x() - total_w / 2
         start_y = rect.center().y() - target_h / 2
 
-        thickness = max(2.0, target_h * 0.105)
+        thickness = max(1.5, target_h * stroke_ratio)
         vertical_length = (target_h - 3 * thickness) / 2
 
         painter.save()
@@ -120,21 +123,25 @@ class SevenSegmentRenderer:
         for index, ch in enumerate(digits):
             x = start_x + index * (digit_w + spacing)
             y = start_y
-
             active = set(self.SEGMENTS.get(ch, ""))
 
             paths = {
-                "a": self._h_segment(x + thickness * 0.10, y, digit_w - thickness * 0.20, thickness),
+                "a": self._h_segment(
+                    x + thickness * 0.08,
+                    y,
+                    digit_w - thickness * 0.16,
+                    thickness,
+                ),
                 "g": self._h_segment(
-                    x + thickness * 0.10,
+                    x + thickness * 0.08,
                     y + target_h / 2 - thickness / 2,
-                    digit_w - thickness * 0.20,
+                    digit_w - thickness * 0.16,
                     thickness,
                 ),
                 "d": self._h_segment(
-                    x + thickness * 0.10,
+                    x + thickness * 0.08,
                     y + target_h - thickness,
-                    digit_w - thickness * 0.20,
+                    digit_w - thickness * 0.16,
                     thickness,
                 ),
                 "f": self._v_segment(
@@ -172,13 +179,6 @@ class SevenSegmentRenderer:
 class DeviceVisualWidget(QWidget):
     """
     Renders a model-specific digital twin without modifying source assets.
-
-    The model profile can point to a cleaned render-base image. Dynamic LCD
-    characters are painted directly onto that image with no opaque patches.
-
-    Button states are represented by selectively recoloring only green pixels
-    inside tightly bounded rectangles. Existing button symbols and texture are
-    therefore preserved.
     """
 
     def __init__(self, parent=None):
@@ -206,10 +206,7 @@ class DeviceVisualWidget(QWidget):
         self.update()
 
     def _load_image(self):
-        render_asset = None
-
-        if self._profile:
-            render_asset = self._profile.get("render_image")
+        render_asset = self._profile.get("render_image") if self._profile else None
 
         if render_asset:
             candidate = MODEL_IMAGE_DIR / render_asset
@@ -246,8 +243,6 @@ class DeviceVisualWidget(QWidget):
             )
             return
 
-        # Work at the original image resolution, then perform exactly one
-        # high-quality scale into the widget.
         rendered = self._base_image.copy()
 
         if self._profile:
@@ -255,7 +250,6 @@ class DeviceVisualWidget(QWidget):
 
         rendered_pixmap = QPixmap.fromImage(rendered)
 
-        # LCD values are painted at source resolution onto the same pixmap.
         if self._profile:
             self._paint_lcd_values(rendered_pixmap)
 
@@ -296,7 +290,8 @@ class DeviceVisualWidget(QWidget):
         w = pixmap.width()
         h = pixmap.height()
 
-        digit_color = QColor(self._profile.get("display", {}).get("digit_color", "#F4FBFF"))
+        display = self._profile.get("display", {})
+        digit_color = QColor(display.get("digit_color", "#F4FBFF"))
         segment_renderer = SevenSegmentRenderer(digit_color)
 
         numeric_values = {
@@ -315,20 +310,21 @@ class DeviceVisualWidget(QWidget):
                 painter,
                 str(value),
                 rect,
-                digit_height_ratio=spec.get("digit_height_ratio", 0.92),
-                spacing_ratio=spec.get("spacing_ratio", 0.12),
+                digit_height_ratio=spec.get("digit_height_ratio", 0.80),
+                digit_width_ratio=spec.get("digit_width_ratio", 0.40),
+                stroke_ratio=spec.get("stroke_ratio", 0.072),
+                spacing_ratio=spec.get("spacing_ratio", 0.11),
             )
 
         runtime_spec = fields.get("time_remaining")
         if runtime_spec:
             rect = self._normalized_rect(runtime_spec, w, h)
-
             painter.setPen(digit_color)
 
             font = QFont("Arial")
             font.setBold(True)
             font.setPixelSize(
-                max(8, int(runtime_spec.get("font_ratio", 0.0175) * h))
+                max(8, int(runtime_spec.get("font_ratio", 0.0145) * h))
             )
             painter.setFont(font)
             painter.drawText(rect, Qt.AlignCenter, self._state.time_remaining)
@@ -348,16 +344,8 @@ class DeviceVisualWidget(QWidget):
 
         for name, enabled in states.items():
             spec = buttons.get(name)
-            if not spec:
-                continue
-
-            # The source render image shows illuminated green button faces.
-            # Leave ON buttons unchanged and selectively mute the green pixels
-            # for OFF buttons.
-            if enabled:
-                continue
-
-            self._mute_green_region(image, spec)
+            if spec and not enabled:
+                self._mute_green_region(image, spec)
 
     def _mute_green_region(self, image: QImage, spec: dict[str, Any]):
         width = image.width()
@@ -376,28 +364,20 @@ class DeviceVisualWidget(QWidget):
         for y in range(y0, y1):
             for x in range(x0, x1):
                 c = image.pixelColor(x, y)
-
                 r, g, b, a = c.red(), c.green(), c.blue(), c.alpha()
 
-                # Select only genuinely green-lit pixels. Dark gray plastic,
-                # highlights, lettering outlines, and surrounding pixels are
-                # not altered.
                 if (
                     g >= min_green
                     and g >= r + dominance
                     and g >= b + dominance
                 ):
-                    nr = int(r * brightness_scale)
-                    ng = int(g * green_scale)
-                    nb = int(b * brightness_scale)
-
                     image.setPixelColor(
                         x,
                         y,
                         QColor(
-                            max(0, min(255, nr)),
-                            max(0, min(255, ng)),
-                            max(0, min(255, nb)),
+                            max(0, min(255, int(r * brightness_scale))),
+                            max(0, min(255, int(g * green_scale))),
+                            max(0, min(255, int(b * brightness_scale))),
                             a,
                         ),
                     )

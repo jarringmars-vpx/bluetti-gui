@@ -2,10 +2,6 @@ MODEL_NAME = "EL30V2"
 DISPLAY_NAME = "Elite 30 V2"
 CAPACITY_WH = 288.0
 
-# Digital-twin visual profile for the selected 2000x2000 EL30V2 render base.
-#
-# All coordinates are normalized to source-image dimensions, allowing the same
-# profile to remain valid regardless of how large the widget is displayed.
 VISUAL_PROFILE = {
     "render_image": "EL30V2_render.png",
 
@@ -13,50 +9,53 @@ VISUAL_PROFILE = {
         "digit_color": "#F4FBFF",
 
         "fields": {
-            # Existing permanent INPUT/W label remains in the image.
-            # Only the live number is painted beneath it.
+            # Left numeric field beneath INPUT W.
             "input_watts": {
-                "x": 0.382,
-                "y": 0.350,
-                "width": 0.071,
-                "height": 0.052,
-                "digit_height_ratio": 0.86,
+                "x": 0.390,
+                "y": 0.361,
+                "width": 0.057,
+                "height": 0.039,
+                "digit_height_ratio": 0.78,
+                "digit_width_ratio": 0.40,
+                "stroke_ratio": 0.068,
                 "spacing_ratio": 0.10,
             },
 
-            # SOC sits inside the center of the blue circular gauge.
+            # Center SOC value inside the gauge.
             "soc": {
-                "x": 0.469,
-                "y": 0.346,
-                "width": 0.067,
-                "height": 0.060,
-                "digit_height_ratio": 0.93,
-                "spacing_ratio": 0.10,
+                "x": 0.479,
+                "y": 0.354,
+                "width": 0.043,
+                "height": 0.043,
+                "digit_height_ratio": 0.82,
+                "digit_width_ratio": 0.40,
+                "stroke_ratio": 0.068,
+                "spacing_ratio": 0.09,
             },
 
-            # Existing permanent OUTPUT/W label remains in the image.
+            # Right numeric field beneath OUTPUT W.
             "output_watts": {
-                "x": 0.552,
-                "y": 0.350,
-                "width": 0.071,
-                "height": 0.052,
-                "digit_height_ratio": 0.86,
+                "x": 0.557,
+                "y": 0.361,
+                "width": 0.057,
+                "height": 0.039,
+                "digit_height_ratio": 0.78,
+                "digit_width_ratio": 0.40,
+                "stroke_ratio": 0.068,
                 "spacing_ratio": 0.10,
             },
 
-            # Runtime is centered below the SOC value.
+            # Runtime centered below SOC.
             "time_remaining": {
-                "x": 0.449,
-                "y": 0.402,
-                "width": 0.107,
-                "height": 0.031,
-                "font_ratio": 0.0175,
+                "x": 0.456,
+                "y": 0.407,
+                "width": 0.088,
+                "height": 0.023,
+                "font_ratio": 0.0145,
             },
         },
     },
 
-    # Tight button rectangles. ON uses the original photographed green pixels.
-    # OFF selectively darkens only green pixels inside the corresponding area.
     "buttons": {
         "dc_output": {
             "x": 0.359,
