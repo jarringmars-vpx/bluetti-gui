@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -35,11 +36,16 @@ class CommunityBackend:
     """
     Persistent encrypted BLUETTI community-library backend.
 
-    v0.2.15 keeps one BLE/GATT connection and one encrypted session open while
-    telemetry is polled repeatedly. It reconnects only when the link is truly
-    lost or a read fails.
+    v0.2.25 adds continuous per-scan console tracing. Every targeted poll
+    prints its start time, raw register data, completion time, elapsed time,
+    and the idle gap since the previous scan completed. Polling behavior and
+    intervals are otherwise unchanged from v0.2.20.
 
-    The GUI-facing API remains the same as v0.2.12-v0.2.14.
+    A transient read failure does not tear down an otherwise healthy
+    authenticated BLE session. Reconnection is reserved for actual session
+    loss or sustained failures.
+
+    The GUI-facing control API remains read-only in this version.
     """
 
     supports_writes = False
@@ -57,6 +63,25 @@ class CommunityBackend:
         self.scan_seconds = max(1.0, float(scan_seconds))
         self.read_timeout = int(read_timeout)
         self.reconnect_seconds = max(0.5, float(reconnect_seconds))
+
+        # Polling groups are logical GUI/backend capabilities, not raw
+        # register knowledge exposed to widgets. The main dashboard currently
+        # needs these groups. Future screens can activate/deactivate groups.
+        self._active_poll_groups = {
+            "control_state",
+            "power_flow",
+            "battery_summary",
+            "temperature",
+            "settings",
+        }
+        self._poll_group_intervals = {
+            "control_state": 0.35,
+            "power_flow": 0.75,
+            "battery_summary": 1.0,
+            "temperature": 2.5,
+            "settings": 10.0,
+        }
+        self._max_transient_failures = 3
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
@@ -96,6 +121,45 @@ class CommunityBackend:
         with self._lock:
             return self._address
 
+    @property
+    def active_poll_groups(self) -> set[str]:
+        with self._lock:
+            return set(self._active_poll_groups)
+
+    def set_poll_group_active(self, group: str, active: bool):
+        """
+        Activate/deactivate a logical telemetry polling group.
+
+        GUI screens should call this when their visibility changes. Widgets
+        never need to know register addresses.
+        """
+        valid = {"control_state", "power_flow", "battery_summary", "temperature", "settings"}
+        if group not in valid:
+            raise ValueError(
+                f"Unknown Community polling group: {group}. "
+                f"Valid groups: {', '.join(sorted(valid))}"
+            )
+
+        with self._lock:
+            if active:
+                self._active_poll_groups.add(group)
+            else:
+                self._active_poll_groups.discard(group)
+
+    def set_active_poll_groups(self, groups):
+        """Replace the active logical polling-group set atomically."""
+        requested = set(groups)
+        valid = {"control_state", "power_flow", "battery_summary", "temperature", "settings"}
+        unknown = requested - valid
+        if unknown:
+            raise ValueError(
+                "Unknown Community polling group(s): "
+                + ", ".join(sorted(unknown))
+            )
+
+        with self._lock:
+            self._active_poll_groups = requested
+
     def get_telemetry(self) -> CommunityTelemetry:
         with self._lock:
             t = self._telemetry
@@ -130,7 +194,7 @@ class CommunityBackend:
 
     def _set_read_only_notice(self, control: str):
         with self._lock:
-            self._status_message = f"{control} control is read-only in v0.2.15."
+            self._status_message = f"{control} control is read-only in v0.2.25."
 
     def _worker_main(self):
         try:
@@ -140,25 +204,24 @@ class CommunityBackend:
 
     async def _async_worker(self):
         while not self._stop_event.is_set():
-            reader = None
-            client = None
+            session = None
 
             try:
                 if self.model != "EL30V2":
                     raise RuntimeError(
-                        f"v0.2.15 CommunityBackend currently supports only EL30V2, "
+                        f"v0.2.25 CommunityBackend currently supports only EL30V2, "
                         f"not {self.model}."
                     )
 
                 device = await self._resolve_device()
 
                 self._set_status(f"Connecting to {self.model} over Community BLE...")
-                reader, client = await self._open_persistent_session(device)
+                session = await self._open_persistent_session(device)
 
                 self._set_status(
                     f"Community BLE connected — live data from {self.model}"
                 )
-                await self._poll_session(reader, client)
+                await self._poll_session(session)
 
             except asyncio.CancelledError:
                 raise
@@ -166,7 +229,7 @@ class CommunityBackend:
                 if not self._stop_event.is_set():
                     self._record_failure(str(exc))
             finally:
-                await self._close_session(reader, client)
+                await self._close_session(session)
 
             if self._stop_event.is_set():
                 break
@@ -247,156 +310,292 @@ class CommunityBackend:
 
     async def _open_persistent_session(self, device):
         try:
-            from bleak_retry_connector import (
-                BleakClientWithServiceCache,
-                establish_connection,
+            from bluetti_bt_lib.bluetooth.device_session import (
+                DeviceSession,
+                DeviceSessionConfig,
             )
-            from bluetti_bt_lib import DeviceReader, DeviceReaderConfig
             from bluetti_bt_lib.devices import EL30V2
-            from bluetti_bt_lib.const import NOTIFY_UUID
         except ImportError as exc:
             raise RuntimeError(
                 f"Community BLE dependency import failed: {exc}"
             ) from exc
 
-        client = await establish_connection(
-            BleakClientWithServiceCache,
-            device,
-            getattr(device, "name", None) or self.model,
-            max_attempts=10,
-        )
-
         loop = asyncio.get_running_loop()
 
-        reader = DeviceReader(
+        session = DeviceSession(
             getattr(device, "address", self._address),
             EL30V2(),
             loop.create_future,
-            config=DeviceReaderConfig(
+            config=DeviceSessionConfig(
                 timeout=self.read_timeout,
                 use_encryption=True,
+                command_timeout=0.5,
             ),
-            ble_client=client,
         )
 
-        reader.client = client
+        await session.connect()
+        return session
 
-        await client.start_notify(NOTIFY_UUID, reader._notification_handler)
-        reader.has_notifier = True
+    async def _poll_session(self, session):
+        """
+        Demand-driven scheduler for active telemetry groups.
 
-        started = time.monotonic()
-        while not reader.encryption.is_ready_for_commands:
-            if self._stop_event.is_set():
-                raise RuntimeError("Backend stopping.")
+        control_state:
+            R2011-R2012 (AC state, DC state)
+        power_flow:
+            R140-R149 (DC out, AC out, PV/DC in, AC/grid in)
+        battery_summary:
+            R102 only (SOC)
+        temperature:
+            R1153 only (primary temperature, raw / 10 C)
+        settings:
+            R2020 only (charging mode); lowest-priority/infrequent polling.
 
-            if not client.is_connected:
-                raise RuntimeError(
-                    "Bluetooth connection was lost during encryption handshake."
-                )
+        No full session.read() is used in the normal dashboard loop.
 
-            if time.monotonic() - started > self.read_timeout:
-                raise TimeoutError(
-                    "Encryption handshake did not finish before timeout."
-                )
+        Fast blocks use DeviceSession.read_registers(), keeping register
+        knowledge inside the backend rather than GUI widgets.
+        """
+        next_due = {
+            "control_state": 0.0,
+            "power_flow": 0.0,
+            "battery_summary": 0.0,
+            "temperature": 0.0,
+            "settings": 0.0,
+        }
+        consecutive_failures = 0
+        previous_scan_completed = None
 
-            await asyncio.sleep(0.25)
-
-        return reader, client
-
-    async def _poll_session(self, reader, client):
         while not self._stop_event.is_set():
-            cycle_started = time.monotonic()
-
-            if not client.is_connected:
+            if not session.is_connected:
                 raise RuntimeError("Bluetooth connection was lost.")
 
-            data = await self._read_polling_registers(reader)
-
-            if not data:
-                raise RuntimeError("Persistent Community BLE read returned no data.")
-
-            telemetry = self._normalize(data)
+            if not session.is_ready:
+                raise RuntimeError("Encrypted Community BLE session is not ready.")
 
             with self._lock:
-                self._telemetry = telemetry
-                self._last_error = ""
-                self._status_message = (
-                    f"Community BLE connected — live data from {self.model}"
+                active_groups = set(self._active_poll_groups)
+
+            now = time.monotonic()
+            due = [
+                group
+                for group in active_groups
+                if now >= next_due.get(group, 0.0)
+            ]
+
+            if not due:
+                await self._sleep_interruptibly(0.05)
+                continue
+
+            # Fastest groups first so controls remain responsive.
+            due.sort(
+                key=lambda group: {
+                    "control_state": 0,
+                    "power_flow": 1,
+                    "battery_summary": 2,
+                    "temperature": 3,
+                    "settings": 4,
+                }.get(group, 99)
+            )
+
+            for group in due:
+                if self._stop_event.is_set():
+                    return
+
+                scan_names = {
+                    "control_state": "AC/DC Output",
+                    "power_flow": "Power Flow",
+                    "battery_summary": "Battery SOC",
+                    "temperature": "Temperature",
+                    "settings": "Charging Mode",
+                }
+                scan_name = scan_names.get(group, group)
+
+                poll_started = time.monotonic()
+                start_timestamp = self._console_timestamp()
+                gap_text = (
+                    "first scan"
+                    if previous_scan_completed is None
+                    else f"gap={poll_started - previous_scan_completed:.3f}s"
                 )
 
-            elapsed = time.monotonic() - cycle_started
-            delay = max(0.0, self.poll_seconds - elapsed)
-            await self._sleep_interruptibly(delay)
-
-    async def _read_polling_registers(self, reader) -> dict[str, Any]:
-        parsed_data: dict[str, Any] = {}
-
-        for register in reader.bluetti_device.get_polling_registers():
-            response = await reader._async_send_command(register)
-
-            if not response:
-                raise RuntimeError(
-                    f"No response reading register block starting at "
-                    f"{register.starting_address}."
+                # Deliberately leave the line open. On a normal read the raw
+                # values and completion timing are appended to this same line.
+                print(
+                    f"{start_timestamp} {scan_name} Scan Started: "
+                    f"[{gap_text}] ",
+                    end="",
+                    flush=True,
                 )
 
-            body = register.parse_response(response)
-            parsed = reader.bluetti_device.parse(register.starting_address, body)
-            parsed_data.update(parsed)
+                values = None
+                scan_diagnostics = []
+                try:
+                    if group == "control_state":
+                        values = await session.read_registers(2011, 2)
+                        scan_diagnostics = session.consume_scan_diagnostics()
+                        self._apply_control_state_block(values)
 
-        pack_registers = reader.bluetti_device.get_pack_polling_registers()
+                    elif group == "power_flow":
+                        values = await session.read_registers(140, 10)
+                        scan_diagnostics = session.consume_scan_diagnostics()
+                        self._apply_power_block(values)
 
-        for pack in range(1, reader.bluetti_device.max_packs + 1):
-            selector = reader.bluetti_device.get_pack_selector(pack)
-            response = await reader._async_send_command(selector)
+                    elif group == "battery_summary":
+                        values = await session.read_registers(102, 1)
+                        scan_diagnostics = session.consume_scan_diagnostics()
+                        self._apply_battery_summary_block(values)
 
-            if not response:
-                raise RuntimeError(f"No response selecting battery pack {pack}.")
+                    elif group == "temperature":
+                        values = await session.read_registers(1153, 1)
+                        scan_diagnostics = session.consume_scan_diagnostics()
+                        self._apply_temperature_block(values)
 
-            await asyncio.sleep(3)
+                    elif group == "settings":
+                        values = await session.read_registers(2020, 1)
+                        scan_diagnostics = session.consume_scan_diagnostics()
+                        self._apply_settings_block(values)
 
-            for register in pack_registers:
-                response = await reader._async_send_command(register)
+                    completed_at = time.monotonic()
+                    completed_timestamp = self._console_timestamp()
+                    poll_elapsed = completed_at - poll_started
+                    previous_scan_completed = completed_at
 
-                if not response:
-                    raise RuntimeError(
-                        f"No response reading pack {pack}, register "
-                        f"{register.starting_address}."
+                    diagnostic_text = (
+                        " | ".join(scan_diagnostics) + " | "
+                        if scan_diagnostics
+                        else ""
+                    )
+                    print(
+                        f"{diagnostic_text}"
+                        f"Raw={self._format_raw_registers(values)} | "
+                        f"Scan Completed at {completed_timestamp} | "
+                        f"elapsed={poll_elapsed:.3f}s",
+                        flush=True,
                     )
 
-                body = register.parse_response(response)
-                parsed = reader.bluetti_device.parse(
-                    register.starting_address,
-                    body,
-                    pack_num=pack,
-                )
-                parsed_data.update(parsed)
+                    consecutive_failures = 0
+                    with self._lock:
+                        self._last_error = ""
+                        self._telemetry.connected = True
+                        self._status_message = (
+                            f"Community BLE connected — live data from "
+                            f"{self.model}"
+                        )
 
-        return parsed_data
+                except Exception as exc:
+                    try:
+                        scan_diagnostics = session.consume_scan_diagnostics()
+                    except Exception:
+                        scan_diagnostics = []
 
-    async def _close_session(self, reader, client):
-        if reader is not None and client is not None:
-            if getattr(reader, "has_notifier", False):
-                try:
-                    from bluetti_bt_lib.const import NOTIFY_UUID
-                    await client.stop_notify(NOTIFY_UUID)
-                except Exception:
-                    pass
-                reader.has_notifier = False
+                    completed_at = time.monotonic()
+                    completed_timestamp = self._console_timestamp()
+                    poll_elapsed = completed_at - poll_started
+                    previous_scan_completed = completed_at
 
-        if client is not None:
-            try:
-                if client.is_connected:
-                    await client.disconnect()
-            except Exception:
-                pass
+                    diagnostic_text = (
+                        " | ".join(scan_diagnostics) + " | "
+                        if scan_diagnostics
+                        else ""
+                    )
+                    print(
+                        f"{diagnostic_text}"
+                        f"ERROR={type(exc).__name__}: {exc} | "
+                        f"Scan Ended at {completed_timestamp} | "
+                        f"elapsed={poll_elapsed:.3f}s | "
+                        f"connected={session.is_connected} "
+                        f"ready={session.is_ready}",
+                        flush=True,
+                    )
 
-        if reader is not None:
-            try:
-                reader.encryption.reset()
-                reader.encrypted_buffer.clear()
-            except Exception:
-                pass
+                    # A command timeout or malformed/short response does not
+                    # imply link loss. DeviceSession already retries the
+                    # command/block on the same authenticated session.
+                    if not session.is_connected or not session.is_ready:
+                        raise RuntimeError(
+                            f"Community BLE session lost while polling "
+                            f"{group}: {exc}"
+                        ) from exc
+
+                    consecutive_failures += 1
+                    with self._lock:
+                        self._last_error = (
+                            f"Transient {group} read failure: {exc}"
+                        )
+                        self._status_message = (
+                            f"Community BLE connected — retrying {group}"
+                        )
+                        self._telemetry.connected = True
+
+                    if consecutive_failures >= self._max_transient_failures:
+                        raise RuntimeError(
+                            f"{consecutive_failures} consecutive Community "
+                            f"BLE read failures while session remained ready; "
+                            f"last group={group}: {exc}"
+                        ) from exc
+
+                finally:
+                    next_due[group] = (
+                        time.monotonic()
+                        + self._poll_group_intervals[group]
+                    )
+
+            await self._sleep_interruptibly(0.02)
+
+    @staticmethod
+    def _console_timestamp() -> str:
+        """Wall-clock timestamp with millisecond precision for console traces."""
+        return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+    @staticmethod
+    def _format_raw_registers(values: dict[int, int] | None) -> str:
+        """Format targeted raw register values in address order."""
+        if not values:
+            return "{}"
+        return "{" + ", ".join(
+            f"R{address}=0x{int(value) & 0xFFFF:04X}({int(value)})"
+            for address, value in sorted(values.items())
+        ) + "}"
+
+    def _apply_control_state_block(self, values: dict[int, int]):
+        with self._lock:
+            self._telemetry.ac_output_enabled = bool(values[2011])
+            self._telemetry.dc_output_enabled = bool(values[2012])
+            self._telemetry.connected = True
+
+    def _apply_settings_block(self, values: dict[int, int]):
+        with self._lock:
+            self._telemetry.charging_mode = self._charging_mode(values[2020])
+            self._telemetry.connected = True
+
+    def _apply_power_block(self, values: dict[int, int]):
+        with self._lock:
+            self._telemetry.dc_output_power = float(values[140])
+            self._telemetry.ac_output_power = float(values[142])
+            self._telemetry.dc_input_power = float(values[144])
+            self._telemetry.ac_input_power = float(values[146])
+            self._telemetry.connected = True
+
+    def _apply_battery_summary_block(self, values: dict[int, int]):
+        with self._lock:
+            soc = int(values[102])
+            self._telemetry.soc = max(0, min(100, soc))
+            self._telemetry.connected = True
+
+    def _apply_temperature_block(self, values: dict[int, int]):
+        with self._lock:
+            self._telemetry.temperature_c = float(values[1153]) / 10.0
+            self._telemetry.connected = True
+
+    async def _close_session(self, session):
+        if session is None:
+            return
+
+        try:
+            await session.disconnect()
+        except Exception:
+            pass
 
     async def _sleep_interruptibly(self, seconds: float):
         end = time.monotonic() + max(0.0, seconds)
