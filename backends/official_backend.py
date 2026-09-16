@@ -62,10 +62,12 @@ class OfficialDeviceInfo:
 class OfficialBackend:
     """First GUI integration of BLUETTI's official native crypt path.
 
-    v0.2.48 aligns Official authorization-file handling with BLUETTI's
-    documentation: the device authorization CSV is expected in the application
-    working directory (the repository root beside app.py). Expanded Official
-    responsiveness and validator behavior from v0.2.47 are otherwise unchanged.
+    v0.2.51 keeps the Community-style optimistic AC/DC/charging-mode feedback
+    from v0.2.50 and shortens Official transaction failure recovery. Expanded
+    Official now uses the same 0.5-second command timeout used by the mature
+    Community path, so an autonomous/unmatched EL30V2 frame cannot stall a poll
+    or control readback for multiple seconds. Authorization-file handling remains
+    as introduced in v0.2.48.
 
     BLUETTI_OFFICIAL_DIR may still be used as an advanced local override for the
     authorization working directory.
@@ -86,7 +88,7 @@ class OfficialBackend:
         diagnostic_config: Optional[dict] = None,
         poll_seconds: float = 2.0,
         scan_seconds: float = 8.0,
-        command_timeout: float = 2.0,
+        command_timeout: float = 0.5,
         reconnect_seconds: float = 2.0,
         expanded_validator: bool = False,
     ):
@@ -121,7 +123,7 @@ class OfficialBackend:
         # latched in the GUI until we observe it consistently, with a short timeout
         # so genuine later device changes are still reflected.
         self._control_holds = {}
-        self._control_hold_seconds = 4.0
+        self._control_hold_seconds = 5.0
         self._control_hold_required_matches = 2
 
         # Expanded Official currently uses individual FC03 transactions because the
@@ -254,13 +256,24 @@ class OfficialBackend:
             )
             return
 
-        # Mark the requested value as pending BEFORE changing normalized telemetry.
-        # Poll results for this register are suppressed until verification finishes,
-        # preventing stale pre-write values from making the button flicker.
+        # Match the Community backend's optimistic-control behavior exactly:
+        # mark the requested value pending and immediately update normalized
+        # telemetry so the on-screen control responds at click time. While the
+        # command is pending, normal polls for this register are suppressed.
+        # After verified readback, the short hold below rejects stale rebound
+        # polls until normal device telemetry has caught up.
         with self._lock:
             self._pending_controls[int(register)] = int(value)
-
-        self._apply_verified_control(int(register), int(value))
+            if int(register) == 2011:
+                self._telemetry.ac_output_enabled = bool(value)
+            elif int(register) == 2012:
+                self._telemetry.dc_output_enabled = bool(value)
+            elif int(register) == 2020:
+                self._telemetry.charging_mode = {
+                    0: "Standard",
+                    1: "Silent",
+                    2: "Turbo",
+                }.get(int(value), f"Unknown ({value})")
 
         self._control_queue.put((int(register), int(value), str(label)))
         self._set_status(f"Official Expanded: queued {label} change")
@@ -470,6 +483,46 @@ class OfficialBackend:
 
                     if updates:
                         with self._lock:
+                            # Final stale-control guard. A fast-poll batch can read
+                            # R2011/R2012 immediately before a user control request,
+                            # then finish after the optimistic state has already been
+                            # applied. Re-check pending/hold state at the actual
+                            # telemetry commit so that an in-flight pre-click value
+                            # cannot overwrite the newer requested state.
+                            now_commit = time.monotonic()
+                            control_fields = {
+                                "ac_output_enabled": 2011,
+                                "dc_output_enabled": 2012,
+                                "charging_mode": 2013,
+                            }
+                            for field_name, register in control_fields.items():
+                                if field_name not in updates:
+                                    continue
+
+                                desired = self._pending_controls.get(register)
+                                hold = self._control_holds.get(register)
+                                if desired is None and hold is not None:
+                                    if now_commit < float(hold.get("expires", 0.0)):
+                                        desired = int(hold["value"])
+
+                                if desired is not None:
+                                    # The optimistic/held value already lives in
+                                    # self._telemetry. Never commit a contradictory
+                                    # value captured by a poll that began earlier.
+                                    if register in (2011, 2012):
+                                        polled = 1 if bool(updates[field_name]) else 0
+                                    else:
+                                        mode_to_value = {
+                                            "Standard": 0,
+                                            "Silent": 1,
+                                            "Turbo": 2,
+                                        }
+                                        polled = mode_to_value.get(
+                                            str(updates[field_name]), -1
+                                        )
+                                    if int(polled) != int(desired):
+                                        updates.pop(field_name, None)
+
                             self._telemetry.connected = True
                             for field_name, value in updates.items():
                                 setattr(self._telemetry, field_name, value)
@@ -733,16 +786,25 @@ class OfficialBackend:
                     }
                 self._set_status(f"Official Expanded: {label} change verified")
             except Exception as exc:
-                # A failed control write must not tear down an otherwise healthy
-                # BLE/authentication session. Release the pending-state suppression
-                # so the next normal poll can restore the device's authoritative state.
+                # The EL30V2 may apply an FC06 write even when an autonomous frame
+                # makes the immediate FC03 verification indeterminate. Do not let
+                # that ambiguous verification undo the optimistic GUI state. Move
+                # the requested value into the same stale-poll hold used after a
+                # verified write. Normal polling continues; contradictory values
+                # are suppressed until telemetry catches up or the safety timeout
+                # expires. Matching polls release the hold normally.
                 with self._lock:
                     if self._pending_controls.get(register) == value:
                         self._pending_controls.pop(register, None)
-                    self._control_holds.pop(register, None)
-                    self._last_error = f"{label} write failed: {exc}"
+                    self._control_holds[register] = {
+                        "value": int(value),
+                        "matches": 0,
+                        "expires": time.monotonic() + self._control_hold_seconds,
+                    }
+                    self._last_error = f"{label} verification indeterminate: {exc}"
                     self._status_message = (
-                        f"Official Expanded: {label} write failed — {exc}"
+                        f"Official Expanded: {label} verification indeterminate — "
+                        "holding requested state while polling continues"
                     )
 
     async def _write_register_verified(
@@ -759,8 +821,11 @@ class OfficialBackend:
         no conventional FC06 echo is returned. Therefore we do not spend 300 ms
         waiting for an echo and we never blindly retransmit the write.
 
-        To allow the device a short processing interval, perform up to three FC03
-        readbacks. These retries are reads only; FC06 is still transmitted once.
+        Perform one prompt FC03 readback after the short processing interval.
+        If an autonomous/unmatched frame prevents that readback from being
+        determined within the 0.5-second transaction timeout, abandon this
+        verification attempt and let normal polling continue immediately. The
+        FC06 write is never retransmitted.
         """
         self._drain_queue(queue)
 
@@ -776,19 +841,8 @@ class OfficialBackend:
         # Small processing delay, far shorter than the old 300 ms echo wait.
         await asyncio.sleep(0.05)
 
-        last_value = None
-        for attempt in range(3):
-            values = await self._read_register(client, crypto, queue, register, 1)
-            last_value = values.get(register)
-            if last_value == int(value):
-                return True
-
-            # The write itself is never repeated. Give the device a brief chance
-            # to commit before another readback.
-            if attempt < 2:
-                await asyncio.sleep(0.05)
-
-        return False
+        values = await self._read_register(client, crypto, queue, register, 1)
+        return values.get(register) == int(value)
 
     def _apply_verified_control(self, register: int, value: int):
         with self._lock:
