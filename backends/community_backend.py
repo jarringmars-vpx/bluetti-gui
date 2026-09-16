@@ -135,6 +135,15 @@ class CommunityBackend:
         self._stop_event = threading.Event()
         self._control_queue: queue.Queue[tuple[str, Any, str]] = queue.Queue()
 
+        # Stabilize AC/DC/Charging Mode presentation across asynchronous writes
+        # and polling. While a write is pending, stale poll results are ignored.
+        # After verification, the requested state is held briefly until normal
+        # polling confirms it consistently.
+        self._pending_controls: dict[int, int] = {}
+        self._control_holds: dict[int, dict[str, Any]] = {}
+        self._control_hold_seconds = 2.0
+        self._control_hold_required_matches = 2
+
         configured = (address or os.environ.get("BLUETTI_BLE_ADDRESS", "")).strip()
         self._configured_address = configured or None
         self._address = self._configured_address
@@ -328,6 +337,17 @@ class CommunityBackend:
             else:
                 detail = str(value)
             self._status_message = f"Sending {label} {detail}..."
+
+            if field == "ctrl_ac":
+                self._pending_controls[2011] = 1 if bool(value) else 0
+                self._telemetry.ac_output_enabled = bool(value)
+            elif field == "ctrl_dc":
+                self._pending_controls[2012] = 1 if bool(value) else 0
+                self._telemetry.dc_output_enabled = bool(value)
+            elif field == "ctrl_charging_mode":
+                self._pending_controls[2020] = int(value)
+                self._telemetry.charging_mode = self._charging_mode(value)
+
         self._control_queue.put(
             (field, value, label, int(readback_register), int(readback_count))
         )
@@ -727,15 +747,61 @@ class CommunityBackend:
             for address, value in sorted(values.items())
         ) + "}"
 
-    def _apply_control_state_block(self, values: dict[int, int]):
+    def _filtered_control_value(self, register: int, polled_value: int):
+        now = time.monotonic()
         with self._lock:
-            self._telemetry.ac_output_enabled = bool(values[2011])
-            self._telemetry.dc_output_enabled = bool(values[2012])
+            if register in self._pending_controls:
+                return None
+
+            hold = self._control_holds.get(register)
+            if hold is None:
+                return int(polled_value)
+
+            desired = int(hold["value"])
+            if int(polled_value) == desired:
+                hold["matches"] = int(hold.get("matches", 0)) + 1
+                if hold["matches"] >= self._control_hold_required_matches:
+                    self._control_holds.pop(register, None)
+                    return desired
+                return None
+
+            if now < float(hold["expires"]):
+                hold["matches"] = 0
+                return None
+
+            self._control_holds.pop(register, None)
+            return int(polled_value)
+
+    def _mark_control_verified(self, register: int, value: int):
+        with self._lock:
+            if self._pending_controls.get(register) == int(value):
+                self._pending_controls.pop(register, None)
+            self._control_holds[register] = {
+                "value": int(value),
+                "matches": 0,
+                "expires": time.monotonic() + self._control_hold_seconds,
+            }
+
+    def _mark_control_failed(self, register: int):
+        with self._lock:
+            self._pending_controls.pop(register, None)
+            self._control_holds.pop(register, None)
+
+    def _apply_control_state_block(self, values: dict[int, int]):
+        ac_value = self._filtered_control_value(2011, int(values[2011]))
+        dc_value = self._filtered_control_value(2012, int(values[2012]))
+        with self._lock:
+            if ac_value is not None:
+                self._telemetry.ac_output_enabled = bool(ac_value)
+            if dc_value is not None:
+                self._telemetry.dc_output_enabled = bool(dc_value)
             self._telemetry.connected = True
 
     def _apply_settings_block(self, values: dict[int, int]):
+        mode_value = self._filtered_control_value(2020, int(values[2020]))
         with self._lock:
-            self._telemetry.charging_mode = self._charging_mode(values[2020])
+            if mode_value is not None:
+                self._telemetry.charging_mode = self._charging_mode(mode_value)
             self._telemetry.connected = True
 
     def _apply_power_block(self, values: dict[int, int]):
@@ -805,23 +871,29 @@ class CommunityBackend:
                 scan_diagnostics = []
 
             if field in ("ctrl_ac", "ctrl_dc"):
-                self._apply_control_state_block(readback)
-                actual = (
-                    self._telemetry.ac_output_enabled
-                    if field == "ctrl_ac"
-                    else self._telemetry.dc_output_enabled
-                )
+                register = 2011 if field == "ctrl_ac" else 2012
+                actual_raw = int(readback[register])
+                actual = bool(actual_raw)
+
                 if actual != bool(value):
                     raise RuntimeError(
                         f"{label} read-back did not match requested state "
                         f"(requested={bool(value)}, actual={actual})"
                     )
+
+                with self._lock:
+                    if field == "ctrl_ac":
+                        self._telemetry.ac_output_enabled = actual
+                    else:
+                        self._telemetry.dc_output_enabled = actual
+                    self._telemetry.connected = True
+
+                self._mark_control_verified(register, 1 if actual else 0)
                 requested_text = "ON" if bool(value) else "OFF"
                 actual_text = "ON" if actual else "OFF"
                 diagnostic_category = "control_state"
 
             elif field == "ctrl_charging_mode":
-                self._apply_settings_block(readback)
                 actual_raw = int(readback[2020])
                 if actual_raw != int(value):
                     raise RuntimeError(
@@ -829,6 +901,12 @@ class CommunityBackend:
                         f"(requested={self._charging_mode(value)}, "
                         f"actual={self._charging_mode(actual_raw)})"
                     )
+
+                with self._lock:
+                    self._telemetry.charging_mode = self._charging_mode(actual_raw)
+                    self._telemetry.connected = True
+
+                self._mark_control_verified(2020, actual_raw)
                 requested_text = self._charging_mode(value)
                 actual_text = self._charging_mode(actual_raw)
                 diagnostic_category = "settings"
@@ -847,6 +925,13 @@ class CommunityBackend:
                 self._status_message = f"{label} {actual_text} confirmed."
                 self._last_error = ""
         except Exception as exc:
+            if field == "ctrl_ac":
+                self._mark_control_failed(2011)
+            elif field == "ctrl_dc":
+                self._mark_control_failed(2012)
+            elif field == "ctrl_charging_mode":
+                self._mark_control_failed(2020)
+
             try:
                 scan_diagnostics = session.consume_scan_diagnostics()
             except Exception:

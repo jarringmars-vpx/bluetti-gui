@@ -16,9 +16,11 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSizePolicy,
     QDialog,
+    QMessageBox,
 )
 
 from backends.community_backend import CommunityBackend
+from backends.official_backend import OfficialBackend
 from gui.widgets.device_visual import DeviceVisualWidget, DeviceVisualState
 from services.runtime_estimator import RuntimeEstimator
 from services.settings_service import SettingsService
@@ -198,6 +200,18 @@ class MainWindow(QMainWindow):
     def _create_backend(self):
         address = self.app_settings.device_address.strip() or None
         should_start = bool(address and self.app_settings.auto_connect)
+        backend_name = (self.app_settings.preferred_backend or "community").lower()
+        if backend_name in {"official", "official_expanded"}:
+            return OfficialBackend(
+                model=self.app_settings.device_model or "EL30V2",
+                address=address,
+                device_name=self.app_settings.device_name,
+                auto_start=should_start,
+                auto_reconnect=self.app_settings.auto_reconnect,
+                diagnostic_config=self._diagnostic_config(),
+                expanded_validator=(backend_name == "official_expanded"),
+            )
+
         return CommunityBackend(
             model=self.app_settings.device_model or "EL30V2",
             address=address,
@@ -439,9 +453,24 @@ class MainWindow(QMainWindow):
         content.addWidget(right, 6)
         root.addLayout(content, 1)
 
-        self.footer = QLabel("Starting Community BLE backend...")
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, 0, 0, 0)
+        footer_row.setSpacing(8)
+
+        self.footer = QLabel("Starting BLUETTI backend...")
         self.footer.setObjectName("footer")
-        root.addWidget(self.footer)
+        self.footer.setWordWrap(True)
+        footer_row.addWidget(self.footer, 1)
+
+        self.official_help_button = QPushButton("?")
+        self.official_help_button.setObjectName("officialHelpButton")
+        self.official_help_button.setFixedSize(24, 24)
+        self.official_help_button.setToolTip("More information about BLUETTI Official Library setup")
+        self.official_help_button.clicked.connect(self._show_official_backend_help)
+        self.official_help_button.setVisible(False)
+        footer_row.addWidget(self.official_help_button, 0, Qt.AlignBottom)
+
+        root.addLayout(footer_row)
 
     def _apply_panel_order(self):
         if not hasattr(self, "dashboard_grid"):
@@ -475,11 +504,16 @@ class MainWindow(QMainWindow):
     def _settings_changed(self, settings):
         old_address = self.app_settings.device_address
         old_model = self.app_settings.device_model
+        old_backend = self.app_settings.preferred_backend
         self.app_settings = settings
         configure = getattr(self.backend, "configure_diagnostics", None)
         if callable(configure):
             configure(self._diagnostic_config())
-        if old_address != settings.device_address or old_model != settings.device_model:
+        if (
+            old_address != settings.device_address
+            or old_model != settings.device_model
+            or old_backend != settings.preferred_backend
+        ):
             self._replace_backend()
         self._apply_panel_order()
         self.refresh()
@@ -530,9 +564,13 @@ class MainWindow(QMainWindow):
 
     def _set_ac_output(self, checked: bool):
         self.backend.set_ac_output(checked)
+        # Refresh immediately so the digital twin and text stay in sync with the
+        # button's optimistic checked state rather than waiting for the 1 s timer.
+        self.refresh()
 
     def _set_dc_output(self, checked: bool):
         self.backend.set_dc_output(checked)
+        self.refresh()
 
     def _set_ac_output_from_image(self, enabled: bool):
         self.backend.set_ac_output(enabled)
@@ -544,6 +582,7 @@ class MainWindow(QMainWindow):
 
     def _set_mode(self, mode: str):
         self.backend.set_charging_mode(mode)
+        self.refresh()
 
     def _load_model_image(self, model: str):
         profile = EL30V2_VISUAL_PROFILE if model == "EL30V2" else None
@@ -698,6 +737,51 @@ class MainWindow(QMainWindow):
             )
         )
 
+        backend_name = (
+            getattr(self.app_settings, "preferred_backend", "community") or "community"
+        ).lower()
+        backend_error = str(getattr(self.backend, "last_error", "") or "").strip()
+        self.official_help_button.setVisible(
+            backend_name in {"official", "official_expanded"} and bool(backend_error)
+        )
+
+    def _show_official_backend_help(self):
+        backend = getattr(self, "backend", None)
+        auth_dir = getattr(
+            backend,
+            "official_dir",
+            Path(__file__).resolve().parent.parent,
+        )
+
+        box = QMessageBox(self)
+        box.setWindowTitle("BLUETTI Official Library Setup")
+        box.setIcon(QMessageBox.Information)
+        box.setText("The BLUETTI Official Library requires authorization material.")
+        box.setInformativeText(
+            "To use the Official backend:\n\n"
+            "1. Obtain the BLUETTI Official Python library/crypt module from BLUETTI.\n"
+            "2. Contact BLUETTI to request the authorization CSV for your device.\n"
+            "3. Place that authorization CSV in the GUI repository root, beside app.py:\n\n"
+            f"   {auth_dir}\n\n"
+            "This matches BLUETTI's documented application-working-directory behavior. "
+            "The bluetti_crypt.py wrapper and native crypt module are imported from "
+            "your Python installation; they do not need to be copied into the GUI "
+            "repository.\n\n"
+            "Advanced: BLUETTI_OFFICIAL_DIR can override the authorization working "
+            "directory. Expanded Validator development files remain in the separate "
+            "Official research directory.\n\n"
+            "Authorization CSVs are device-specific/private and should not be "
+            "committed to a public repository.\n\n"
+            "Validator modes:\n"
+            "• Stock Official uses BLUETTI's installed native validator unchanged.\n"
+            "• Expanded Validator uses the isolated EL30V2 sandbox under the Official "
+            "research directory. It remains read-only in the GUI.\n\n"
+            "Because _bluetti_crypt is a native extension, switching between Stock "
+            "Official and Expanded Validator after one of them has already loaded "
+            "requires restarting the GUI."
+        )
+        box.exec()
+
     def _apply_styles(self):
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{
@@ -735,6 +819,19 @@ class MainWindow(QMainWindow):
             #connectionLabel {{
                 font-weight: 600;
                 color: #ef6a6a;
+            }}
+
+            #officialHelpButton {{
+                background: #243746;
+                color: #62B6DF;
+                border: 1px solid #62B6DF;
+                border-radius: 12px;
+                font-weight: 700;
+                padding: 0px;
+            }}
+            #officialHelpButton:hover {{
+                background: #31516a;
+                color: #ffffff;
             }}
 
             #connectionLabel[connected="true"] {{
