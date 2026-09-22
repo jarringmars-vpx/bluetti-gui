@@ -1,7 +1,9 @@
 from pathlib import Path
 from typing import Optional
 
-MODEL_IMAGE_DIR = Path("Images") / "Bluetti_Models"
+from app_paths import resource_path
+
+MODEL_IMAGE_DIR = resource_path("Images", "Bluetti_Models")
 
 # Preserve BLUETTI's original CDN format whenever possible.
 # WEBP is checked first because many current BLUETTI masters use it.

@@ -1,4 +1,4 @@
-BLUETTI Desktop GUI v0.2.54
+BLUETTI Desktop GUI v0.2.58
 ===========================
 
 Requirements
@@ -106,6 +106,33 @@ The change does not alter polling, command timing, encryption, or session
 behavior. v0.2.53 remains the immediately preceding known-good functional
 baseline.
 
+Community-only Windows release build
+------------------------------------
+v0.2.55 adds the first packaging baseline for a self-contained public Windows
+Community-backend release. The normal source checkout still retains the
+Official backend, but the Community PyInstaller build excludes it and presents
+only the Community Library option.
+
+Build from the repository root on the Windows development PC:
+
+    build_community_release.bat
+
+The first-stage portable build is created at:
+
+    dist\BLUETTI Monitor\BLUETTI Monitor.exe
+
+The entire `dist\BLUETTI Monitor` folder must be copied when testing this
+first-stage build. The clean Windows 11 test computer does not need Python.
+
+The packaged application resolves bundled Images resources independently of
+the current working directory. Diagnostic logs default to the current user's
+local application-data directory so an eventual Program Files installation
+does not require write access to the installation directory.
+
+The v0.2.54 research-only session-AES-key diagnostic is intentionally removed
+from v0.2.55/public packaging work. Public release builds must not expose the
+negotiated BLE session key in normal diagnostics.
+
 Versioning
 ----------
 Increment the GUI version for every meaningful update.
@@ -116,3 +143,32 @@ Update package naming:
 
 Prefer complete modified files in update packages rather than manual patching
 of core GUI files.
+
+
+v0.2.56 packaging correction
+-----------------------------
+v0.2.56 makes the Community release build explicitly freeze the local
+C:\Users\clay\bluetti-bt-lib checkout used by the working development GUI.
+The build now verifies that checkout before PyInstaller starts and aborts if it
+is missing, preventing a superficially successful but incomplete executable.
+The PyInstaller spec adds that checkout to its module search path before
+collecting bluetti_bt_lib and again as an Analysis path.
+
+
+v0.2.58 Windows installer packaging
+-----------------------------------
+
+v0.2.58 adds the first Windows Setup.exe build path for the Community-only
+release. The frozen application is still built by build_community_release.bat.
+After that succeeds, build_windows_installer.bat compiles
+packaging\BLUETTI_Monitor_Community.iss with Inno Setup and writes the final
+installer to installer_output\BLUETTI_Monitor_v0.2.58_Setup.exe.
+
+The installer targets 64-bit Windows 10/11, installs under Program Files, adds
+a Start Menu shortcut, offers an optional desktop shortcut, and registers a
+normal Windows uninstaller. End users do not need Python, PySide6, Bleak,
+bluetti_bt_lib, or Inno Setup. Inno Setup is needed only on the developer PC
+to compile Setup.exe.
+
+This remains a Community-only public packaging baseline. Official Library
+components and authorization CSV files are not included in the installer.

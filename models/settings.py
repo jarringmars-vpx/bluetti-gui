@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from app_paths import default_log_dir
+
 
 DEFAULT_PANEL_ORDER = ["ac", "dc", "battery", "temperature", "charging_mode"]
 DEFAULT_DIAGNOSTIC_CATEGORIES = {
@@ -40,6 +42,6 @@ class AppSettings:
     )
     diagnostics_to_console: bool = False
     diagnostics_to_file: bool = False
-    diagnostics_log_directory: str = "logs"
+    diagnostics_log_directory: str = field(default_factory=lambda: str(default_log_dir()))
     diagnostic_message_format: str = "raw"  # raw | registers | both
     diagnostic_registers_per_group: int = 10

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from models.settings import AppSettings, DEFAULT_PANEL_ORDER
 from services.settings_service import SettingsService
+from release_config import COMMUNITY_ONLY
 from gui.device_setup_wizard import DeviceSetupWizard
 
 
@@ -226,8 +227,9 @@ class SettingsWindow(QDialog):
         connection_form = QFormLayout(connection_group)
         self.backend_combo = QComboBox()
         self.backend_combo.addItem("Community Library", "community")
-        self.backend_combo.addItem("Official BLUETTI Library (stock validator)", "official")
-        self.backend_combo.addItem("Official BLUETTI Library — Expanded Validator", "official_expanded")
+        if not COMMUNITY_ONLY:
+            self.backend_combo.addItem("Official BLUETTI Library (stock validator)", "official")
+            self.backend_combo.addItem("Official BLUETTI Library — Expanded Validator", "official_expanded")
         self.auto_connect_check = QCheckBox("Connect to the saved device when the application starts")
         self.auto_reconnect_check = QCheckBox("Automatically reconnect after an unexpected connection loss")
         connection_form.addRow("Preferred backend:", self.backend_combo)

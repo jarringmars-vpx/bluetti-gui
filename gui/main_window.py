@@ -20,12 +20,16 @@ from PySide6.QtWidgets import (
 )
 
 from backends.community_backend import CommunityBackend
-from backends.official_backend import OfficialBackend
+from release_config import COMMUNITY_ONLY
+
+if not COMMUNITY_ONLY:
+    from backends.official_backend import OfficialBackend
 from gui.widgets.device_visual import DeviceVisualWidget, DeviceVisualState
 from services.runtime_estimator import RuntimeEstimator
 from services.settings_service import SettingsService
 from gui.settings_window import SettingsWindow
 from gui.device_setup_wizard import DeviceSetupWizard
+from app_paths import resource_path
 from devices.definitions.EL30V2 import (
     CAPACITY_WH as EL30V2_CAPACITY_WH,
     VISUAL_PROFILE as EL30V2_VISUAL_PROFILE,
@@ -201,6 +205,8 @@ class MainWindow(QMainWindow):
         address = self.app_settings.device_address.strip() or None
         should_start = bool(address and self.app_settings.auto_connect)
         backend_name = (self.app_settings.preferred_backend or "community").lower()
+        if COMMUNITY_ONLY:
+            backend_name = "community"
         if backend_name in {"official", "official_expanded"}:
             return OfficialBackend(
                 model=self.app_settings.device_model or "EL30V2",
@@ -263,7 +269,7 @@ class MainWindow(QMainWindow):
             super().closeEvent(event)
 
     def _icon(self, name: str) -> str:
-        return f"Images/Icons/{name}.svg"
+        return str(resource_path("Images", "Icons", f"{name}.svg"))
 
     def _build_menu(self):
         settings_action = QAction("Settings", self)
@@ -742,7 +748,9 @@ class MainWindow(QMainWindow):
         ).lower()
         backend_error = str(getattr(self.backend, "last_error", "") or "").strip()
         self.official_help_button.setVisible(
-            backend_name in {"official", "official_expanded"} and bool(backend_error)
+            (not COMMUNITY_ONLY)
+            and backend_name in {"official", "official_expanded"}
+            and bool(backend_error)
         )
 
     def _show_official_backend_help(self):

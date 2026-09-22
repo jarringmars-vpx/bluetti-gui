@@ -492,26 +492,7 @@ class CommunityBackend:
 
         await session.connect()
 
-        # v0.2.54 BLE-sniffer research aid: expose the negotiated IoT-v2
-        # session key only through the existing diagnostics subsystem. This
-        # does not alter polling, command timing, encryption, or session state.
-        try:
-            session_key = session.encryption.secure_aes_key
-            if session_key is not None:
-                self._emit_diagnostic(
-                    "connection",
-                    f"BLUETTI IOT-V2 SESSION ESTABLISHED | SESSION_AES_KEY={session_key.hex()}",
-                )
-            else:
-                self._emit_diagnostic(
-                    "connection",
-                    "BLUETTI IOT-V2 session ready but SESSION_AES_KEY is unavailable",
-                )
-        except Exception as exc:
-            self._emit_diagnostic(
-                "connection",
-                f"Unable to record IoT-v2 session key: {exc}",
-            )
+        # Public release builds intentionally do not expose negotiated session keys.
 
         return session
 

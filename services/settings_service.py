@@ -5,6 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings
 
+from app_paths import default_log_dir
 from models.settings import (
     AppSettings,
     DEFAULT_DIAGNOSTIC_CATEGORIES,
@@ -77,7 +78,7 @@ class SettingsService:
                 "diagnostics/to_file", False, type=bool
             ),
             diagnostics_log_directory=self._settings.value(
-                "diagnostics/log_directory", "logs", type=str
+                "diagnostics/log_directory", str(default_log_dir()), type=str
             ),
             diagnostic_message_format=self._settings.value(
                 "diagnostics/message_format", "raw", type=str
