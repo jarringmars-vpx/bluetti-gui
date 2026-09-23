@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import re
 
+from services.operational_log import operational_log, start_operational_log_session
+
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
@@ -14,7 +16,7 @@ KNOWN_MODELS = [
     "AC200PL", "AC200L", "AC200M", "AC180T", "AC180P", "AC180",
     "AC70P", "AC70", "AC60P", "AC60", "AC50B", "AC2P", "AC2A",
     "AC300", "AC500", "AP300", "EB3A", "EP500P", "EP500", "EP600",
-    "EP760", "EP800", "EP2000",
+    "EP760", "EP800", "EP2000", "HA1", "HA",
 ]
 
 
@@ -56,7 +58,9 @@ class ScanWorker(QObject):
 
     async def _scan(self):
         from bleak import BleakScanner
+        operational_log("BLE setup scan started")
         discovered = await BleakScanner.discover(timeout=8.0, return_adv=True)
+        operational_log(f"BLE setup scan completed: {len(discovered)} advertisement(s) returned")
         rows = []
         for device, adv in discovered.values():
             name = ((getattr(adv, "local_name", None) or getattr(device, "name", None) or "").strip())
@@ -67,6 +71,10 @@ class ScanWorker(QObject):
             if model == "Unknown" and "BLUETTI" not in name.upper():
                 continue
             rssi = getattr(adv, "rssi", None)
+            operational_log(
+                f"BLUETTI scan candidate: name={name!r}, address={address!r}, "
+                f"model={model!r}, rssi={rssi!r}"
+            )
             rows.append({"name": name, "address": address, "model": model, "rssi": rssi})
         rows.sort(key=lambda x: x["rssi"] if isinstance(x["rssi"], (int, float)) else -9999, reverse=True)
         return rows
@@ -174,6 +182,11 @@ class DeviceSetupWizard(QDialog):
         if not selected:
             return
         data = selected[0].data(256)
+        start_operational_log_session(data.get("name"))
+        operational_log(
+            f"BLE device selected: name={data.get('name')!r}, model={data.get('model')!r}, "
+            f"address={data.get('address')!r}, rssi={data.get('rssi')!r}"
+        )
         self.device_selected.emit(data)
         self.accept()
 

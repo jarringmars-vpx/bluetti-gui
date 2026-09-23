@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from services.operational_log import (
+    current_operational_log_path,
+    operational_log,
+    start_operational_log_session,
+)
+
 
 @dataclass
 class CommunityTelemetry:
@@ -163,6 +169,13 @@ class CommunityBackend:
         self._last_error = ""
 
         self._worker = None
+        if auto_start:
+            start_operational_log_session(self._device_name or self.model)
+        operational_log(
+            f"CommunityBackend created: model={self.model!r}, "
+            f"device_name={self._device_name!r}, address={self._configured_address!r}, "
+            f"auto_start={bool(auto_start)}, auto_reconnect={self.auto_reconnect}"
+        )
         if auto_start:
             self.start()
 
@@ -363,27 +376,45 @@ class CommunityBackend:
             session = None
 
             try:
-                if self.model != "EL30V2":
+                if self.model not in {"EL30V2", "AP300"}:
                     raise RuntimeError(
-                        f"v0.2.34 CommunityBackend currently supports only EL30V2, "
-                        f"not {self.model}."
+                        f"v0.2.60 CommunityBackend live GUI support is currently "
+                        f"implemented for EL30V2 and AP300, not {self.model}."
                     )
 
+                operational_log(f"Resolving BLE device for model={self.model!r}, address={self._address!r}")
                 device = await self._resolve_device()
+                operational_log(
+                    f"BLE device resolved: model={self.model!r}, "
+                    f"name={getattr(device, 'name', None)!r}, address={getattr(device, 'address', None)!r}"
+                )
 
                 self._set_status(f"Connecting to {self.model} over Community BLE...")
+                operational_log(f"Opening Community DeviceSession for {self.model}")
                 session = await self._open_persistent_session(device)
+                operational_log(
+                    f"DeviceSession connected: model={self.model}, "
+                    f"is_connected={getattr(session, 'is_connected', None)}, "
+                    f"is_ready={getattr(session, 'is_ready', None)}"
+                )
                 await self._refresh_device_info(session, device)
 
                 self._set_status(
                     f"Community BLE connected — live data from {self.model}"
                 )
-                await self._poll_session(session)
+                if self.model == "AP300":
+                    await self._poll_ap300_session(session)
+                else:
+                    await self._poll_session(session)
 
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 if not self._stop_event.is_set():
+                    operational_log(
+                        f"Community backend failure: model={self.model!r}, "
+                        f"address={self._address!r}, error={type(exc).__name__}: {exc}"
+                    )
                     self._record_failure(str(exc))
             finally:
                 await self._close_session(session)
@@ -471,17 +502,45 @@ class CommunityBackend:
                 DeviceSession,
                 DeviceSessionConfig,
             )
-            from bluetti_bt_lib.devices import EL30V2
+            from bluetti_bt_lib.devices import DEVICES
         except ImportError as exc:
             raise RuntimeError(
                 f"Community BLE dependency import failed: {exc}"
             ) from exc
 
+        device_class = DEVICES.get(self.model)
+        if device_class is None:
+            raise RuntimeError(
+                f"The bundled community library has no device definition for {self.model}."
+            )
+
         loop = asyncio.get_running_loop()
+        operational_log(
+            f"Using community device definition {device_class.__name__} for {self.model}"
+        )
+
+        community_device = device_class()
+
+        # AP300 support in the bundled community library currently exposes
+        # telemetry fields but omits the standard IoT-v2 AC/DC switch fields.
+        # Real-device validation in v0.2.60 uses R2011/R2012, matching the
+        # standard IoT-v2 control map used by EL30V2/AC180/AC70-class devices.
+        # Add the fields to this runtime instance only; do not modify the
+        # bundled third-party library.
+        if self.model == "AP300":
+            from bluetti_bt_lib.fields import FieldName, SwitchField
+            community_device.fields.extend([
+                SwitchField(FieldName.CTRL_AC, 2011),
+                SwitchField(FieldName.CTRL_DC, 2012),
+            ])
+            community_device.fields.sort(key=lambda field: field.address)
+            operational_log(
+                "AP300 runtime control map enabled: ctrl_ac=R2011, ctrl_dc=R2012"
+            )
 
         session = DeviceSession(
             getattr(device, "address", self._address),
-            EL30V2(),
+            community_device,
             loop.create_future,
             config=DeviceSessionConfig(
                 timeout=self.read_timeout,
@@ -495,6 +554,92 @@ class CommunityBackend:
         # Public release builds intentionally do not expose negotiated session keys.
 
         return session
+
+    async def _poll_ap300_session(self, session):
+        """AP300 real-device validation loop (v0.2.60).
+
+        Poll the known-safe BaseDeviceV2 SOC register and AP300 power-flow
+        registers, plus the candidate standard IoT-v2 AC/DC state registers
+        R2011/R2012. Process queued GUI writes every cycle. Each block is
+        isolated so an unsupported candidate register cannot stop the known
+        AP300 telemetry polls.
+        """
+        operational_log(
+            "AP300 polling started: control R2011-R2012, SOC R102, "
+            "power R140-R146; GUI writes enabled"
+        )
+        consecutive_failures = 0
+        while not self._stop_event.is_set():
+            if not session.is_connected:
+                raise RuntimeError("AP300 Bluetooth connection was lost.")
+            if not session.is_ready:
+                raise RuntimeError("AP300 encrypted Community BLE session is not ready.")
+
+            # Send queued GUI AC/DC commands before polling their readback.
+            await self._process_pending_control_write(session)
+
+            successful_blocks = 0
+            blocks = (
+                ("control_state", "AP300 AC/DC Output", 2011, 2, self._apply_control_state_block),
+                ("battery_summary", "AP300 SOC", 102, 1, None),
+                ("power_flow", "AP300 Power Flow", 140, 7, self._apply_power_block),
+            )
+
+            for category, label, address, count, apply_fn in blocks:
+                started = time.monotonic()
+                timestamp = self._console_timestamp()
+                try:
+                    values = await session.read_registers(address, count)
+                    try:
+                        scan_diagnostics = session.consume_scan_diagnostics()
+                    except Exception:
+                        scan_diagnostics = []
+
+                    if category == "battery_summary":
+                        with self._lock:
+                            self._telemetry.battery_percent = int(values[102])
+                            self._telemetry.connected = True
+                    elif apply_fn is not None:
+                        apply_fn(values)
+
+                    elapsed = time.monotonic() - started
+                    self._emit_diagnostic(
+                        category,
+                        f"{timestamp} {label} Scan | "
+                        f"Raw={self._format_raw_registers(values)} | "
+                        f"elapsed={elapsed:.3f}s",
+                    )
+                    self._emit_session_diagnostics(scan_diagnostics)
+                    operational_log(
+                        f"{label} OK Raw={self._format_raw_registers(values)} "
+                        f"elapsed={elapsed:.3f}s"
+                    )
+                    successful_blocks += 1
+                except Exception as exc:
+                    elapsed = time.monotonic() - started
+                    message = (
+                        f"{timestamp} {label} ERROR={type(exc).__name__}: {exc} | "
+                        f"R{address} count={count} elapsed={elapsed:.3f}s"
+                    )
+                    self._emit_diagnostic("retry_timeout", message)
+                    operational_log(message)
+                    if not session.is_connected or not session.is_ready:
+                        raise
+
+            if successful_blocks:
+                consecutive_failures = 0
+                with self._lock:
+                    self._last_error = ""
+                    self._telemetry.connected = True
+                    self._status_message = f"Community BLE connected — live data from {self.model}"
+            else:
+                consecutive_failures += 1
+                if consecutive_failures >= self._max_transient_failures:
+                    raise RuntimeError(
+                        f"AP300: all polling blocks failed for {consecutive_failures} consecutive cycles."
+                    )
+
+            await self._sleep_interruptibly(self.poll_seconds)
 
     async def _poll_session(self, session):
         """
@@ -1093,13 +1238,20 @@ class CommunityBackend:
             try:
                 with self._diagnostic_lock:
                     if self._diagnostic_file is None:
-                        directory = Path(config.get("log_directory") or "logs")
-                        directory.mkdir(parents=True, exist_ok=True)
-                        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        self._diagnostic_file_path = directory / f"bluetti_gui_diagnostics_{stamp}.txt"
-                        self._diagnostic_file = self._diagnostic_file_path.open("a", encoding="utf-8", buffering=1)
+                        self._diagnostic_file_path = current_operational_log_path()
+                        if self._diagnostic_file_path is None:
+                            self._diagnostic_file_path = start_operational_log_session(
+                                self._device_name or self.model
+                            )
+                        if self._diagnostic_file_path is None:
+                            raise RuntimeError("Unable to create connection-session log")
+                        self._diagnostic_file = self._diagnostic_file_path.open(
+                            "a", encoding="utf-8", buffering=1
+                        )
                         started = self._console_timestamp()
-                        self._diagnostic_file.write(f"{started} [system] BLUETTI GUI diagnostics started\n")
+                        self._diagnostic_file.write(
+                            f"{started} [system] Detailed diagnostics joined connection session\n"
+                        )
                     categorized_line = "\n".join(
                         f"{timestamp} [{category}] {part}" for part in line.splitlines()
                     )

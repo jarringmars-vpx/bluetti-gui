@@ -1,4 +1,4 @@
-BLUETTI Desktop GUI v0.2.58
+BLUETTI Desktop GUI v0.2.61
 ===========================
 
 Requirements
@@ -172,3 +172,32 @@ to compile Setup.exe.
 
 This remains a Community-only public packaging baseline. Official Library
 components and authorization CSV files are not included in the installer.
+
+
+
+v0.2.61 per-device connection-session logging
+----------------------------------------------
+v0.2.61 changes logging so each selected-device connection attempt gets one log
+file named with its timestamp and advertised device name, for example
+2026-09-23_10-45-32_AP3002549130711401.log. The same file remains active for
+the full connection session, including early connection failures, operational
+messages, polling/control diagnostics, reconnect activity, and disconnects.
+Selecting a different device starts a new log file. Detailed Community-backend
+diagnostics now join the same connection-session file instead of creating a
+second diagnostics file. Setup scanning before a device is selected does not
+create a standalone session log.
+
+v0.2.60 AP300 field-test support and early operational logging
+------------------------------------------------------------
+v0.2.60 fixes the Community backend session construction so the selected model's
+bundled bluetti_bt_lib device class is used instead of always constructing EL30V2.
+AP300 now opens with the AP300 community device definition and initially polls only
+the community library's established power-flow registers (R140/R142/R144/R146).
+EL30V2 retains its validated specialized polling path.
+
+A separate always-on, low-volume operational log now starts during the setup BLE
+scan and records discovery, selection, backend/session creation, and early connection
+failures even when detailed diagnostics are disabled. Installed builds write these
+logs to %%LOCALAPPDATA%%\BLUETTI Monitor\logs, not Program Files. HA/HA1 names are
+recognized during discovery for identification/logging, but HA1 protocol support is
+not claimed in this release.

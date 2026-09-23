@@ -1,5 +1,5 @@
 #define MyAppName "BLUETTI Monitor"
-#define MyAppVersion "0.2.58"
+#define MyAppVersion "0.2.61"
 #define MyAppPublisher "BLUETTI Monitor Community Project"
 #define MyAppExeName "BLUETTI Monitor.exe"
 

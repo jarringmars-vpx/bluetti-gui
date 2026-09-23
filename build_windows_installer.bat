@@ -41,5 +41,5 @@ if errorlevel 1 (
 echo.
 echo INSTALLER BUILD COMPLETE
 echo Installer:
-echo   "%CD%\installer_output\BLUETTI_Monitor_v0.2.58_Setup.exe"
+echo   "%CD%\installer_output\BLUETTI_Monitor_v0.2.61_Setup.exe"
 endlocal
