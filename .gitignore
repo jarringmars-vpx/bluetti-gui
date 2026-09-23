@@ -52,4 +52,4 @@ private/
 *.csv
 
 # Generated model-image download reports
-Images/Bluetti_Models/download_report.json
+Images/Bluetti_Models/download_report.json*.zip
