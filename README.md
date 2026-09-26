@@ -1,4 +1,67 @@
-BLUETTI Desktop GUI v0.2.61
+## v0.2.70 single-library battery-flow integration
+
+- Uses the standalone `C:\Users\clay\bluetti-bt-lib` as the only Community Library source.
+- HA combined charging state is read from R6009 on mirrored HA slaves 0/4.
+- Each AP300 member reads its own R6009 state on slave 1/2/3.
+- HA/AP300 drill-down dialogs show the individual member charging state.
+- Main Time Remaining caption changes between Fully Charged / Fully Discharged according to system R6009.
+- Calculated Time Remaining reads `self_consumption_watts` from the Community Library; BLUETTI-native Time Remaining is displayed unchanged.
+- The obsolete GUI `vendor\bluetti_bt_lib` copy is no longer part of the architecture and may be removed after applying this update.
+- Historical scanner build scripts v0.8-v0.9.1 that reference `vendor` are obsolete; v0.9.3 is the current scanner baseline.
+
+BLUETTI Desktop GUI v0.2.68
+
+## v0.2.69 polling diagnostics, Time Remaining fixes, and drill-down affordance
+
+- Fixed BLUETTI Device Value Time Remaining not reaching the GUI: `get_telemetry()` now preserves the decoded native R104 value. Native mode only formats/displays the BLUETTI value; it does not apply GUI self-consumption calculations.
+- HA polling now emits enabled diagnostics for successful HA status, slave identity, AP300 battery/native-runtime, power-flow, and control polls, including slave/register information and decoded native runtime.
+- Calculated Estimate now includes device self-consumption even at zero external load. Apex 300 uses BLUETTI's documented ~20 W; unknown models use the requested 20 W fallback. HA calculated estimates use 20 W per active Apex 300 because capacity/load are aggregated across active members.
+- HA calculated capacity now scales with the active Apex 300 member count (2,764.8 Wh per Apex 300).
+- HA dashboard fields that support member drill-down now show the pointing-hand cursor while clickable.
+
+## v0.2.68 HA hot-plug, native Time Remaining, and BLE diagnostics
+
+- HA artwork now follows the current AP300 member list during an active session, so plugging or unplugging AP300 members updates HA_1/HA_2/HA_3 without reconnecting.
+- Time Remaining now defaults to BLUETTI's native R104 value. Settings offers BLUETTI Device Value or the existing Calculated Estimate; the selected source persists.
+- HA member native Time Remaining is read from each positively identified AP300 and combined for the HA display.
+- BleakCharacteristicNotFoundError during connection now logs the GATT services/characteristics Bleak actually discovered, explicitly closes the failed session, and allows the normal reconnect path to perform a fresh discovery.
+
+## v0.2.67 HA identity-based member discovery fix
+
+- HA topology artwork now counts an AP300 only when the slave 1/2/3 identity read positively returns Device Type `AP300` from R110-R115 and a non-zero Serial Number from R116-R119.
+- Successful reads of SOC/power/control registers no longer establish HA membership.
+- Duplicate AP300 serial numbers are ignored defensively rather than counted as additional members.
+- HA.png remains the initial/fallback artwork; HA_1/HA_2/HA_3 are selected only from positively identified AP300 members.
+
+## v0.2.66 HA topology-aware device artwork
+
+- HA connections initially display the generic `HA` model image.
+- HA member polling now checks AP300 slave addresses 1, 2, and 3.
+- After positive AP300 discovery, the GUI selects `HA_1`, `HA_2`, or `HA_3` according to the discovered member count.
+- The image resolver retains its existing WEBP/PNG/JPG/JPEG support; the topology logic selects an image stem rather than hard-coding `.png`.
+- During a connected HA session, a transient member polling failure does not downgrade an already-established topology image. The topology image resets to generic `HA` after disconnect/reconnect.
+- Non-HA image selection is unchanged.
+
+
+## v0.2.65 HA multi-slave DeviceSession fix
+
+v0.2.65 pairs with bluetti-bt-lib HA/AP300 development update v0.3. The
+Community library DeviceSession.read_registers() API now accepts an optional
+slave_address (default 1) and passes it through to ReadableRegisters. This is
+required for HA polling of slaves 0/4 and member AP300 polling on slaves 1/2.
+The Community Windows build continues to use C:\Users\clay\bluetti-bt-lib
+as the authoritative library checkout.
+
+## v0.2.63 HA/AP300 library synchronization
+
+- Bundles `bluetti-bt-lib_HA_AP300_v0.2` device definitions.
+- HA slaves 0/4 are treated as HA status endpoints; confirmed semantics are R161 inverter state and R171 HA AC Output state.
+- R154 is retained only as an unknown counter-like value, not PV generation.
+- HA aggregate SOC and power-flow values are derived from member AP300 telemetry. HA SOC is the arithmetic mean of responding member SOC values when the expected member set is complete.
+- AP300 R1153 temperature remains unsupported/unconfirmed.
+- AP300/EL30V2 R2018 is defined as AC ECO Shutdown duration (1-4 hours).
+- No speculative PV1/PV2 register mappings or HA R171 write behavior are added.
+
 ===========================
 
 Requirements
@@ -175,9 +238,9 @@ components and authorization CSV files are not included in the installer.
 
 
 
-v0.2.61 per-device connection-session logging
+v0.2.63 per-device connection-session logging
 ----------------------------------------------
-v0.2.61 changes logging so each selected-device connection attempt gets one log
+v0.2.63 changes logging so each selected-device connection attempt gets one log
 file named with its timestamp and advertised device name, for example
 2026-09-23_10-45-32_AP3002549130711401.log. The same file remains active for
 the full connection session, including early connection failures, operational

@@ -21,6 +21,7 @@ class SettingsService:
         self._settings = QSettings(self.ORGANIZATION, self.APPLICATION)
 
     def load(self) -> AppSettings:
+        runtime_source = self._settings.value("runtime/source", "bluetti", type=str)
         method = self._settings.value("runtime/method", "average", type=str)
         minutes = self._settings.value("runtime/average_minutes", 15, type=int)
         temperature_units = self._settings.value(
@@ -45,6 +46,7 @@ class SettingsService:
                 diagnostic_categories[key] = bool(saved_categories[key])
 
         return AppSettings(
+            runtime_source=runtime_source,
             runtime_method=method,
             average_minutes=minutes,
             temperature_units=temperature_units,
@@ -66,6 +68,7 @@ class SettingsService:
             ),
             device_name=self._settings.value("device/name", "", type=str),
             device_address=self._settings.value("device/address", "", type=str),
+            device_aliases=self._json_dict(self._settings.value("device/aliases", "")),
             panel_order=panel_order,
             diagnostics_enabled=self._settings.value(
                 "diagnostics/enabled", False, type=bool
@@ -89,6 +92,7 @@ class SettingsService:
         )
 
     def save(self, settings: AppSettings) -> None:
+        self._settings.setValue("runtime/source", settings.runtime_source)
         self._settings.setValue("runtime/method", settings.runtime_method)
         self._settings.setValue(
             "runtime/average_minutes", settings.average_minutes
@@ -112,6 +116,7 @@ class SettingsService:
         self._settings.setValue("device/model", settings.device_model)
         self._settings.setValue("device/name", settings.device_name)
         self._settings.setValue("device/address", settings.device_address)
+        self._settings.setValue("device/aliases", json.dumps(settings.device_aliases, sort_keys=True))
 
         self._settings.setValue(
             "dashboard/panel_order", json.dumps(settings.panel_order)

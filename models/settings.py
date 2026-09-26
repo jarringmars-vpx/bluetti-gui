@@ -21,6 +21,7 @@ DEFAULT_DIAGNOSTIC_CATEGORIES = {
 
 @dataclass
 class AppSettings:
+    runtime_source: str = "bluetti"  # bluetti | calculated
     runtime_method: str = "average"
     average_minutes: int = 15
     temperature_units: str = "fahrenheit"  # fahrenheit | celsius | both
@@ -33,6 +34,7 @@ class AppSettings:
     device_model: str = "EL30V2"
     device_name: str = ""
     device_address: str = ""
+    device_aliases: dict[str, str] = field(default_factory=dict)
 
     panel_order: list[str] = field(default_factory=lambda: list(DEFAULT_PANEL_ORDER))
 

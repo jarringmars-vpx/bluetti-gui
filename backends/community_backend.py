@@ -23,6 +23,7 @@ class CommunityTelemetry:
     model: str = "EL30V2"
     connected: bool = False
     soc: int = 0
+    bluetti_time_remaining_minutes: Optional[float] = None
 
     ac_input_power: float = 0.0
     dc_input_power: float = 0.0
@@ -44,6 +45,24 @@ class CommunityTelemetry:
     ac_output_enabled: bool = False
     dc_output_enabled: bool = False
     charging_mode: str = "Standard"
+
+
+@dataclass
+class HAMemberTelemetry:
+    slave_address: int
+    device_type: str = "AP300"
+    serial_number: str = ""
+    soc: int = 0
+    bluetti_time_remaining_minutes: Optional[float] = None
+    ac_input_power: float = 0.0
+    dc_input_power: float = 0.0
+    ac_output_power: float = 0.0
+    dc_output_power: float = 0.0
+    battery_flow: str = "Unknown"
+    ac_input_voltage: Optional[float] = None
+    ac_output_enabled: bool = False
+    dc_output_enabled: bool = False
+    connected: bool = False
 
 
 @dataclass
@@ -103,6 +122,12 @@ class CommunityBackend:
         diagnostic_config: Optional[dict] = None,
     ):
         self.model = model
+        if self.model in {"HA", "HA1"}:
+            # HA R171 write behavior has not yet been validated. Keep the GUI
+            # read-only for HA-level AC/DC controls until real-device testing.
+            self.supports_ac_output_writes = False
+            self.supports_dc_output_writes = False
+            self.supports_charging_mode_writes = False
         self.poll_seconds = max(1.0, float(poll_seconds))
         self.scan_seconds = max(1.0, float(scan_seconds))
         self.read_timeout = int(read_timeout)
@@ -155,6 +180,9 @@ class CommunityBackend:
         self._address = self._configured_address
 
         self._telemetry = CommunityTelemetry(model=model)
+        self._ha_members: dict[int, HAMemberTelemetry] = {}
+        self._ha_inverter_enabled = False
+        self._ha_ac_output_raw: Optional[int] = None
         self._device_info = CommunityDeviceInfo(
             model=model,
             device_name=self._device_name,
@@ -268,6 +296,7 @@ class CommunityBackend:
                 model=t.model,
                 connected=t.connected,
                 soc=t.soc,
+                bluetti_time_remaining_minutes=t.bluetti_time_remaining_minutes,
                 ac_input_power=t.ac_input_power,
                 dc_input_power=t.dc_input_power,
                 ac_output_power=t.ac_output_power,
@@ -376,7 +405,7 @@ class CommunityBackend:
             session = None
 
             try:
-                if self.model not in {"EL30V2", "AP300"}:
+                if self.model not in {"EL30V2", "AP300", "HA", "HA1"}:
                     raise RuntimeError(
                         f"v0.2.60 CommunityBackend live GUI support is currently "
                         f"implemented for EL30V2 and AP300, not {self.model}."
@@ -404,6 +433,8 @@ class CommunityBackend:
                 )
                 if self.model == "AP300":
                     await self._poll_ap300_session(session)
+                elif self.model in {"HA", "HA1"}:
+                    await self._poll_ha_session(session)
                 else:
                     await self._poll_session(session)
 
@@ -508,7 +539,7 @@ class CommunityBackend:
                 f"Community BLE dependency import failed: {exc}"
             ) from exc
 
-        device_class = DEVICES.get(self.model)
+        device_class = DEVICES.get("HA" if self.model == "HA1" else self.model)
         if device_class is None:
             raise RuntimeError(
                 f"The bundled community library has no device definition for {self.model}."
@@ -549,11 +580,199 @@ class CommunityBackend:
             ),
         )
 
-        await session.connect()
+        try:
+            await session.connect()
+        except Exception as exc:
+            # A recurring Windows/Bleak failure mode is a connected device whose
+            # cached/incomplete GATT table does not expose BLUETTI FF01.  Capture
+            # exactly what Bleak discovered before closing the failed client so
+            # the next reconnect starts from a clean session.
+            if type(exc).__name__ == "BleakCharacteristicNotFoundError":
+                try:
+                    client = getattr(session, "client", None)
+                    services = getattr(client, "services", None) if client is not None else None
+                    discovered = []
+                    if services is not None:
+                        for service in services:
+                            chars = [str(getattr(ch, "uuid", "")) for ch in getattr(service, "characteristics", [])]
+                            discovered.append(f"{getattr(service, 'uuid', '')}:" + ",".join(chars))
+                    operational_log(
+                        "GATT characteristic discovery failure; discovered services/characteristics="
+                        + (" | ".join(discovered) if discovered else "<unavailable>")
+                    )
+                except Exception as diag_exc:
+                    operational_log(f"Unable to capture failed GATT table: {type(diag_exc).__name__}: {diag_exc}")
+                try:
+                    await session.disconnect()
+                except Exception:
+                    pass
+            raise
 
         # Public release builds intentionally do not expose negotiated session keys.
 
         return session
+
+    @staticmethod
+    def _decode_swap_string(values: dict[int, int], start: int, count: int) -> str:
+        raw = bytearray()
+        for reg in range(start, start + count):
+            value = int(values.get(reg, 0)) & 0xFFFF
+            raw.extend(((value >> 8) & 0xFF, value & 0xFF))
+        for i in range(0, len(raw) - 1, 2):
+            raw[i], raw[i + 1] = raw[i + 1], raw[i]
+        return bytes(raw).rstrip(b"\0").decode("ascii", errors="ignore").strip()
+
+    @staticmethod
+    def _decode_serial(values: dict[int, int], start: int = 116) -> str:
+        words = [int(values.get(start + i, 0)) & 0xFFFF for i in range(4)]
+        serial = words[0] + (words[1] << 16) + (words[2] << 32) + (words[3] << 48)
+        return str(serial) if serial else ""
+
+    def get_ha_members(self) -> list[HAMemberTelemetry]:
+        with self._lock:
+            return [HAMemberTelemetry(**vars(self._ha_members[k])) for k in sorted(self._ha_members)]
+
+    async def _poll_ha_session(self, session):
+        """Poll HA-level state plus individual AP300 member telemetry.
+
+        Confirmed HA status is read from slaves 0/4. Aggregate dashboard power
+        values are derived from member AP300s; combined SOC is their arithmetic
+        mean, matching observed BLUETTI app behavior.
+        """
+        operational_log("HA polling started: HA R161/R171 on slaves 0/4; AP300 members on slaves 1/2/3")
+        while not self._stop_event.is_set():
+            if not session.is_connected or not session.is_ready:
+                raise RuntimeError("HA encrypted Community BLE session is not ready.")
+
+            # HA-level state. Read both mirrored endpoints; accept either.
+            ha_ok = False
+            for slave in (0, 4):
+                try:
+                    r161 = await session.read_registers(161, 1, slave_address=slave)
+                    r171 = await session.read_registers(171, 1, slave_address=slave)
+                    r6009 = await session.read_registers(6009, 1, slave_address=slave)
+                    flow_raw = int(r6009[6009])
+                    flow_text = {
+                        0: "Idle",
+                        1: "Charging",
+                        2: "Discharging",
+                    }.get(flow_raw, f"Unknown ({flow_raw})")
+                    with self._lock:
+                        self._ha_inverter_enabled = bool(int(r161[161]))
+                        self._ha_ac_output_raw = int(r171[171])
+                        self._telemetry.ac_output_enabled = self._ha_ac_output_raw == 34
+                        # Slaves 0 and 4 are mirrored HA endpoints. Either is
+                        # authoritative for the combined/system battery-flow state.
+                        self._telemetry.battery_flow = flow_text
+                    ha_ok = True
+                    self._emit_diagnostic(
+                        "control_state",
+                        f"HA slave {slave} status OK | R161={int(r161[161])} R171={int(r171[171])} "
+                        f"R6009={flow_raw} BatteryFlow={flow_text}",
+                    )
+                except Exception as exc:
+                    operational_log(f"HA slave {slave} status read failed: {type(exc).__name__}: {exc}")
+
+            members: dict[int, HAMemberTelemetry] = {}
+            discovered_serials: set[str] = set()
+            for slave in (1, 2, 3):
+                try:
+                    # HA membership is established ONLY by the identity poll:
+                    # R110-R115 must decode to AP300 and R116-R119 must contain
+                    # a non-zero serial number.  Do not infer membership merely
+                    # because later telemetry registers happen to answer.
+                    ident = await session.read_registers(110, 10, slave_address=slave)
+                    device_type = self._decode_swap_string(ident, 110, 6).upper()
+                    serial_number = self._decode_serial(ident)
+                    self._emit_diagnostic(
+                        "connection",
+                        f"HA slave {slave} identity | R110-R119 Raw={self._format_raw_registers(ident)} "
+                        f"type={device_type!r} serial={serial_number!r}",
+                    )
+                    if device_type != "AP300" or not serial_number:
+                        operational_log(
+                            f"HA slave {slave} identity did not identify an AP300 "
+                            f"(type={device_type!r}, serial={serial_number!r}); ignoring slave"
+                        )
+                        continue
+                    if serial_number in discovered_serials:
+                        operational_log(
+                            f"HA slave {slave} returned duplicate AP300 serial {serial_number}; "
+                            "ignoring duplicate identity"
+                        )
+                        continue
+
+                    discovered_serials.add(serial_number)
+                    soc = await session.read_registers(102, 1, slave_address=slave)
+                    runtime = await session.read_registers(104, 1, slave_address=slave)
+                    power = await session.read_registers(140, 7, slave_address=slave)
+                    control = await session.read_registers(2011, 2, slave_address=slave)
+                    volts = await session.read_registers(1314, 1, slave_address=slave)
+                    flow = await session.read_registers(6009, 1, slave_address=slave)
+                    flow_raw = int(flow[6009])
+                    flow_text = {
+                        0: "Idle",
+                        1: "Charging",
+                        2: "Discharging",
+                    }.get(flow_raw, f"Unknown ({flow_raw})")
+                    native_minutes = (float(runtime[104]) / 10000.0) * 167.0
+                    self._emit_diagnostic(
+                        "battery_summary",
+                        f"HA AP300 slave {slave} battery | R102={int(soc[102])} "
+                        f"R104={int(runtime[104])} R6009={flow_raw} BatteryFlow={flow_text} "
+                        f"BLUETTI_TimeRemaining={native_minutes:.3f} min",
+                    )
+                    self._emit_diagnostic(
+                        "power_flow",
+                        f"HA AP300 slave {slave} power | R140-R146 Raw={self._format_raw_registers(power)}",
+                    )
+                    self._emit_diagnostic(
+                        "control_state",
+                        f"HA AP300 slave {slave} control | R2011-R2012 Raw={self._format_raw_registers(control)} "
+                        f"R1314={int(volts.get(1314, 0))}",
+                    )
+                    member = HAMemberTelemetry(
+                        slave_address=slave,
+                        device_type=device_type,
+                        serial_number=serial_number,
+                        soc=max(0, min(100, int(soc[102]))),
+                        bluetti_time_remaining_minutes=native_minutes,
+                        dc_output_power=float(power.get(140, 0)),
+                        ac_output_power=float(power.get(142, 0)),
+                        dc_input_power=float(power.get(144, 0)),
+                        ac_input_power=float(power.get(146, 0)),
+                        battery_flow=flow_text,
+                        ac_input_voltage=float(volts.get(1314, 0)) / 10.0,
+                        ac_output_enabled=bool(int(control.get(2011, 0))),
+                        dc_output_enabled=bool(int(control.get(2012, 0))),
+                        connected=True,
+                    )
+                    members[slave] = member
+                except Exception as exc:
+                    operational_log(f"HA AP300 member slave {slave} poll failed: {type(exc).__name__}: {exc}")
+
+            with self._lock:
+                self._ha_members = members
+                member_count = len(members)
+                if members:
+                    vals = list(members.values())
+                    self._telemetry.soc = int(round(sum(m.soc for m in vals) / len(vals)))
+                    native_times = [m.bluetti_time_remaining_minutes for m in vals if m.bluetti_time_remaining_minutes is not None]
+                    self._telemetry.bluetti_time_remaining_minutes = (sum(native_times) / len(native_times)) if native_times else None
+                    self._telemetry.ac_input_power = sum(m.ac_input_power for m in vals)
+                    self._telemetry.dc_input_power = sum(m.dc_input_power for m in vals)
+                    self._telemetry.ac_output_power = sum(m.ac_output_power for m in vals)
+                    self._telemetry.dc_output_power = sum(m.dc_output_power for m in vals)
+                self._telemetry.connected = bool(ha_ok and members)
+                self._telemetry.model = "HA"
+                self._status_message = (
+                    f"Community BLE connected — HA with {member_count} AP300 member"
+                    f"{'s' if member_count != 1 else ''}"
+                    if member_count else
+                    "Community BLE connected — HA member discovery pending"
+                )
+
+            await asyncio.sleep(self.poll_seconds)
 
     async def _poll_ap300_session(self, session):
         """AP300 real-device validation loop (v0.2.60).
@@ -590,6 +809,11 @@ class CommunityBackend:
                 timestamp = self._console_timestamp()
                 try:
                     values = await session.read_registers(address, count)
+                    if category == "battery_summary":
+                        runtime_values = await session.read_registers(104, 1)
+                        flow_values = await session.read_registers(6009, 1)
+                        values.update(runtime_values)
+                        values.update(flow_values)
                     try:
                         scan_diagnostics = session.consume_scan_diagnostics()
                     except Exception:
@@ -597,7 +821,14 @@ class CommunityBackend:
 
                     if category == "battery_summary":
                         with self._lock:
-                            self._telemetry.battery_percent = int(values[102])
+                            self._telemetry.soc = max(0, min(100, int(values[102])))
+                            self._telemetry.bluetti_time_remaining_minutes = (float(values[104]) / 10000.0) * 167.0 if 104 in values else None
+                            flow_raw = int(values.get(6009, -1))
+                            self._telemetry.battery_flow = {
+                                0: "Idle",
+                                1: "Charging",
+                                2: "Discharging",
+                            }.get(flow_raw, f"Unknown ({flow_raw})")
                             self._telemetry.connected = True
                     elif apply_fn is not None:
                         apply_fn(values)
@@ -763,6 +994,7 @@ class CommunityBackend:
                         # charging/discharging direction separately.
                         values = {}
                         values.update(await session.read_registers(102, 1))
+                        values.update(await session.read_registers(104, 1))
                         values.update(await session.read_registers(6003, 2))
                         values.update(await session.read_registers(6009, 1))
                         scan_diagnostics = session.consume_scan_diagnostics()
@@ -1103,6 +1335,15 @@ class CommunityBackend:
             ble_address=(getattr(device, "address", None) or self._address or ""),
             authenticated=bool(session.is_ready),
         )
+        if self.model in {"HA", "HA1"}:
+            # Exhaustive HA slave 0/4 testing found only the R154-R175 area
+            # responsive. Identity/network data comes from member AP300s, not
+            # from the HA endpoint, so avoid unsupported reads/timeouts here.
+            info.model = "HA"
+            with self._lock:
+                self._device_info = info
+                self._device_name = info.device_name
+            return
         try:
             identity = await session.read_registers(110, 10)
             info.model = self._decode_ascii_words(identity, 110, 6, swap_bytes=True) or self.model

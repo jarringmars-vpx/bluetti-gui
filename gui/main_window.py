@@ -30,6 +30,8 @@ from services.settings_service import SettingsService
 from gui.settings_window import SettingsWindow
 from gui.device_setup_wizard import DeviceSetupWizard
 from app_paths import resource_path
+from bluetti_bt_lib.devices import AP300 as CommunityAP300, EL30V2 as CommunityEL30V2
+
 from devices.definitions.EL30V2 import (
     CAPACITY_WH as EL30V2_CAPACITY_WH,
     VISUAL_PROFILE as EL30V2_VISUAL_PROFILE,
@@ -75,6 +77,8 @@ def format_optional(value, decimals: int, unit: str) -> str:
 
 
 class MetricRow(QWidget):
+    clicked = Signal()
+
     def __init__(self, label: str, value: str = "--", parent=None):
         super().__init__(parent)
         self.setObjectName("metricRow")
@@ -82,19 +86,48 @@ class MetricRow(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        name = QLabel(label)
-        name.setObjectName("metricRowLabel")
+        self.name_label = QLabel(label)
+        self.name_label.setObjectName("metricRowLabel")
 
         self.value_label = QLabel(value)
         self.value_label.setObjectName("metricRowValue")
         self.value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        layout.addWidget(name)
+        layout.addWidget(self.name_label)
         layout.addStretch()
         layout.addWidget(self.value_label)
+        self._drilldown_enabled = False
+
+    def set_drilldown_enabled(self, enabled: bool):
+        self._drilldown_enabled = bool(enabled)
+        self.setCursor(Qt.PointingHandCursor if self._drilldown_enabled else Qt.ArrowCursor)
 
     def set_value(self, value: str):
         self.value_label.setText(value)
+
+    def set_label(self, label: str):
+        self.name_label.setText(label)
+
+    def mousePressEvent(self, event):
+        if self._drilldown_enabled and event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class ClickableLabel(QLabel):
+    clicked = Signal()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._drilldown_enabled = False
+
+    def set_drilldown_enabled(self, enabled: bool):
+        self._drilldown_enabled = bool(enabled)
+        self.setCursor(Qt.PointingHandCursor if self._drilldown_enabled else Qt.ArrowCursor)
+
+    def mousePressEvent(self, event):
+        if self._drilldown_enabled and event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class InfoGroup(QFrame):
@@ -173,6 +206,11 @@ class MainWindow(QMainWindow):
         self.app_settings = self.settings_service.load()
         self.runtime_estimator = RuntimeEstimator()
         self.backend = self._create_backend()
+        # HA artwork starts with the generic HA image for each connection.
+        # Once member discovery positively identifies AP300 slaves, the image
+        # advances to HA_1/HA_2/HA_3 and is not downgraded by a transient miss.
+        self._ha_image_member_count = 0
+        self._ha_image_connected = False
 
         self.setWindowTitle("BLUETTI Monitor")
         self.resize(1220, 780)
@@ -335,10 +373,10 @@ class MainWindow(QMainWindow):
             self._set_ac_output_from_image
         )
 
-        soc_caption = QLabel("Battery State of Charge")
-        soc_caption.setObjectName("sectionLabel")
+        self.soc_caption = QLabel("Battery State of Charge")
+        self.soc_caption.setObjectName("sectionLabel")
 
-        self.soc_value = QLabel("--%")
+        self.soc_value = ClickableLabel("--%")
         self.soc_value.setAlignment(Qt.AlignCenter)
         self.soc_value.setObjectName("socValue")
 
@@ -347,20 +385,20 @@ class MainWindow(QMainWindow):
         self.soc_bar.setTextVisible(False)
         self.soc_bar.setFixedHeight(18)
 
-        runtime_caption = QLabel("Time Remaining")
-        runtime_caption.setAlignment(Qt.AlignCenter)
-        runtime_caption.setObjectName("sectionLabel")
+        self.runtime_caption = QLabel("Time Remaining")
+        self.runtime_caption.setAlignment(Qt.AlignCenter)
+        self.runtime_caption.setObjectName("sectionLabel")
 
         self.runtime_value = QLabel("--")
         self.runtime_value.setAlignment(Qt.AlignCenter)
         self.runtime_value.setObjectName("runtimeValue")
 
         left_layout.addWidget(self.image_label, 1)
-        left_layout.addWidget(soc_caption)
+        left_layout.addWidget(self.soc_caption)
         left_layout.addWidget(self.soc_value)
         left_layout.addWidget(self.soc_bar)
         left_layout.addSpacing(4)
-        left_layout.addWidget(runtime_caption)
+        left_layout.addWidget(self.runtime_caption)
         left_layout.addWidget(self.runtime_value)
 
         content.addWidget(left, 4)
@@ -397,6 +435,12 @@ class MainWindow(QMainWindow):
 
         self.dc_input_row = MetricRow("Input")
         self.dc_output_row = MetricRow("Output")
+
+        self.soc_value.clicked.connect(lambda: self._show_ha_metric_detail("soc", "State of Charge"))
+        self.ac_input_row.clicked.connect(lambda: self._show_ha_metric_detail("ac_input_power", "Grid Input"))
+        self.ac_output_row.clicked.connect(lambda: self._show_ha_metric_detail("ac_output_power", "AC Output"))
+        self.dc_input_row.clicked.connect(lambda: self._show_ha_metric_detail("dc_input_power", "PV Input"))
+        self.dc_output_row.clicked.connect(lambda: self._show_ha_metric_detail("dc_output_power", "DC Output"))
 
         dc_group.layout_box.addWidget(self.dc_button)
         dc_group.layout_box.addWidget(self.dc_input_row)
@@ -592,12 +636,91 @@ class MainWindow(QMainWindow):
 
     def _load_model_image(self, model: str):
         profile = EL30V2_VISUAL_PROFILE if model == "EL30V2" else None
-        self.image_label.set_model(model, profile)
+        image_model = model
+        if model in {"HA", "HA1"}:
+            image_model = (
+                f"HA_{self._ha_image_member_count}"
+                if self._ha_image_member_count in {1, 2, 3}
+                else "HA"
+            )
+        self.image_label.set_model(image_model, profile)
+
+    def _update_ha_image_topology(self, model: str, connected: bool):
+        """Track positively discovered AP300 members for HA artwork selection.
+
+        A new/disconnected HA session uses HA.png. During a connected session the
+        count follows the current positively identified member list, so hot-plug
+        additions and removals update the artwork without reconnecting. Non-HA devices keep the existing image behavior.
+        """
+        if model not in {"HA", "HA1"}:
+            self._ha_image_member_count = 0
+            self._ha_image_connected = False
+            return
+
+        if not connected:
+            self._ha_image_member_count = 0
+            self._ha_image_connected = False
+            return
+
+        if not self._ha_image_connected:
+            self._ha_image_member_count = 0
+            self._ha_image_connected = True
+
+        if not hasattr(self.backend, "get_ha_members"):
+            return
+        try:
+            members = self.backend.get_ha_members()
+        except Exception:
+            return
+
+        discovered = sum(
+            1 for member in members
+            if bool(getattr(member, "connected", True))
+            and str(getattr(member, "device_type", "") or "").upper() == "AP300"
+            and bool(str(getattr(member, "serial_number", "") or "").strip())
+        )
+        if 1 <= discovered <= 3:
+            self._ha_image_member_count = discovered
 
     def _capacity_for_model(self, model: str) -> float:
         if model == "EL30V2":
             return EL30V2_CAPACITY_WH
+        if model == "AP300":
+            return 2764.8
+        if model in {"HA", "HA1"}:
+            try:
+                count = len(self.backend.get_ha_members())
+            except Exception:
+                count = self._ha_image_member_count
+            return 2764.8 * max(0, int(count or 0))
         return 0.0
+
+    def _self_consumption_for_model(self, model: str) -> float:
+        """Read self-consumption metadata from the authoritative Community Library."""
+        default_watts = 20.0
+        try:
+            if model == "EL30V2":
+                return float(getattr(CommunityEL30V2, "self_consumption_watts", default_watts))
+            if model == "AP300":
+                return float(getattr(CommunityAP300, "self_consumption_watts", default_watts))
+            if model in {"HA", "HA1"}:
+                try:
+                    count = len(self.backend.get_ha_members())
+                except Exception:
+                    count = self._ha_image_member_count
+                per_member = float(getattr(CommunityAP300, "self_consumption_watts", default_watts))
+                return per_member * max(1, int(count or 0))
+        except Exception:
+            pass
+        return default_watts
+
+    @staticmethod
+    def _runtime_caption_for_flow(flow: str) -> str:
+        if flow == "Charging":
+            return "Time Remaining Until Fully Charged"
+        if flow == "Discharging":
+            return "Time Remaining Until Fully Discharged"
+        return "Time Remaining"
 
     def _format_temperature(self, celsius):
         if celsius is None:
@@ -611,11 +734,70 @@ class MainWindow(QMainWindow):
             return f"{f:.1f} °F / {c:.1f} °C"
         return f"{f:.1f} °F"
 
+    def _ha_member_name(self, member):
+        serial = str(getattr(member, "serial_number", "") or "").strip()
+        alias = self.app_settings.device_aliases.get(serial, "") if serial else ""
+        if alias:
+            return alias
+        dtype = str(getattr(member, "device_type", "") or "AP300")
+        return f"{dtype} - {serial}" if serial else f"{dtype} (Slave {member.slave_address})"
+
+    def _show_ha_metric_detail(self, metric: str, title: str):
+        if self.current_model not in {"HA", "HA1"} or not hasattr(self.backend, "get_ha_members"):
+            return
+        members = self.backend.get_ha_members()
+        if not members:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"HA — {title}")
+        layout = QVBoxLayout(dialog)
+        heading = QLabel(f"Individual AP300 {title}")
+        heading.setObjectName("sectionLabel")
+        layout.addWidget(heading)
+        for member in members:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(self._ha_member_name(member)))
+            row.addStretch()
+            value = getattr(member, metric, None)
+            if metric == "soc":
+                text = f"{int(value)}%"
+            elif value is None:
+                text = "--"
+            else:
+                text = f"{float(value):.0f} W"
+            value_box = QVBoxLayout()
+            value_label = QLabel(text)
+            value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            value_box.addWidget(value_label)
+            flow_label = QLabel(f"State: {getattr(member, 'battery_flow', 'Unknown')}")
+            flow_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            value_box.addWidget(flow_label)
+            row.addLayout(value_box)
+            layout.addLayout(row)
+        if metric == "dc_input_power":
+            note = QLabel("Individual PV1/PV2 voltage and wattage drill-down will be added when those registers are identified.")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.setMinimumWidth(460)
+        dialog.exec()
+
     def refresh(self):
         t = self.backend.get_telemetry()
         self.current_model = t.model
 
         self.model_label.setText(t.model)
+        is_ha = t.model in {"HA", "HA1"}
+        self.soc_value.set_drilldown_enabled(is_ha)
+        for row in (self.ac_input_row, self.ac_output_row, self.dc_input_row, self.dc_output_row):
+            row.set_drilldown_enabled(is_ha)
+        self.soc_caption.setText("Combined HA State of Charge" if is_ha else "Battery State of Charge")
+        self.ac_input_row.set_label("Grid Input" if is_ha else "Input")
+        self.ac_output_row.set_label("AC Output" if is_ha else "Output")
+        self.dc_input_row.set_label("PV Input" if is_ha else "Input")
+        self.dc_output_row.set_label("DC Output" if is_ha else "Output")
 
         self.connection_label.setText(
             "● Connected" if t.connected else "● Disconnected"
@@ -637,18 +819,24 @@ class MainWindow(QMainWindow):
         )
 
         if t.connected:
+            self.runtime_caption.setText(self._runtime_caption_for_flow(t.battery_flow))
             self.runtime_estimator.add_output_sample(total_output_watts)
-
-            capacity_wh = self._capacity_for_model(t.model)
-            estimate = self.runtime_estimator.estimate_minutes(
-                capacity_wh=capacity_wh,
-                soc_percent=t.soc,
-                current_output_watts=total_output_watts,
-                method=self.app_settings.runtime_method,
-                average_minutes=self.app_settings.average_minutes,
-            )
-            self.runtime_value.setText(self._format_runtime(estimate))
+            native_minutes = getattr(t, "bluetti_time_remaining_minutes", None)
+            if self.app_settings.runtime_source == "bluetti":
+                self.runtime_value.setText(self._format_runtime(native_minutes))
+            else:
+                capacity_wh = self._capacity_for_model(t.model)
+                estimate = self.runtime_estimator.estimate_minutes(
+                    capacity_wh=capacity_wh,
+                    soc_percent=t.soc,
+                    current_output_watts=total_output_watts,
+                    method=self.app_settings.runtime_method,
+                    average_minutes=self.app_settings.average_minutes,
+                    self_consumption_watts=self._self_consumption_for_model(t.model),
+                )
+                self.runtime_value.setText(self._format_runtime(estimate))
         else:
+            self.runtime_caption.setText("Time Remaining")
             self.runtime_value.setText("--")
 
         self.ac_input_row.set_value(
@@ -719,6 +907,7 @@ class MainWindow(QMainWindow):
         self.mode_combo.setCurrentText(t.charging_mode)
         self.mode_combo.blockSignals(False)
 
+        self._update_ha_image_topology(t.model, t.connected)
         self._load_model_image(t.model)
 
         self.image_label.set_state(

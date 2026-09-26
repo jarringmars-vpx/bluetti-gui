@@ -223,6 +223,30 @@ class SettingsWindow(QDialog):
             wifi_form.addRow(label, value)
         layout.addWidget(wifi_group)
 
+        self.member_alias_edits = {}
+        if self.backend is not None and hasattr(self.backend, "get_ha_members"):
+            try:
+                members = self.backend.get_ha_members()
+            except Exception:
+                members = []
+            if members:
+                alias_group = QGroupBox("HA Member Display Names")
+                alias_form = QFormLayout(alias_group)
+                note = QLabel("Optional names are display-only and are saved by AP300 serial number.")
+                note.setWordWrap(True)
+                alias_form.addRow(note)
+                for member in members:
+                    serial = str(member.serial_number or "").strip()
+                    if not serial:
+                        continue
+                    default_name = f"{member.device_type or 'AP300'} - {serial}"
+                    edit = QLineEdit()
+                    edit.setPlaceholderText(default_name)
+                    edit.setText(self.settings.device_aliases.get(serial, ""))
+                    self.member_alias_edits[serial] = edit
+                    alias_form.addRow(default_name + ":", edit)
+                layout.addWidget(alias_group)
+
         connection_group = QGroupBox("Connection")
         connection_form = QFormLayout(connection_group)
         self.backend_combo = QComboBox()
@@ -268,8 +292,14 @@ class SettingsWindow(QDialog):
         temp_form.addRow("Units:", self.temperature_combo)
         root.addWidget(temp_group)
 
-        runtime_group = QGroupBox("Time Remaining Calculation")
+        runtime_group = QGroupBox("Time Remaining")
         runtime_layout = QVBoxLayout(runtime_group)
+        source_form = QFormLayout()
+        self.runtime_source_combo = QComboBox()
+        self.runtime_source_combo.addItem("BLUETTI Device Value (Recommended)", "bluetti")
+        self.runtime_source_combo.addItem("Calculated Estimate", "calculated")
+        source_form.addRow("Source:", self.runtime_source_combo)
+        runtime_layout.addLayout(source_form)
         self.instant_radio = QRadioButton("Instantaneous Load")
         self.average_radio = QRadioButton("Average Load")
         self.method_group = QButtonGroup(self)
@@ -289,6 +319,7 @@ class SettingsWindow(QDialog):
         root.addWidget(runtime_group)
         self.instant_radio.toggled.connect(self._update_enabled_state)
         self.average_radio.toggled.connect(self._update_enabled_state)
+        self.runtime_source_combo.currentIndexChanged.connect(self._update_enabled_state)
         root.addStretch()
         return page
 
@@ -364,6 +395,8 @@ class SettingsWindow(QDialog):
         return page
 
     def _load_values(self):
+        idx = self.runtime_source_combo.findData(self.settings.runtime_source)
+        self.runtime_source_combo.setCurrentIndex(max(0, idx))
         if self.settings.runtime_method == "instantaneous":
             self.instant_radio.setChecked(True)
         else:
@@ -463,9 +496,13 @@ class SettingsWindow(QDialog):
         self.panel_order_label.setText("Current order: " + " → ".join(labels))
 
     def _update_enabled_state(self):
-        self.average_combo.setEnabled(self.average_radio.isChecked())
+        calculated = self.runtime_source_combo.currentData() == "calculated"
+        self.instant_radio.setEnabled(calculated)
+        self.average_radio.setEnabled(calculated)
+        self.average_combo.setEnabled(calculated and self.average_radio.isChecked())
 
     def _save(self):
+        self.settings.runtime_source = self.runtime_source_combo.currentData()
         self.settings.runtime_method = "average" if self.average_radio.isChecked() else "instantaneous"
         self.settings.average_minutes = int(self.average_combo.currentText())
         self.settings.temperature_units = self.temperature_combo.currentData()
@@ -474,6 +511,12 @@ class SettingsWindow(QDialog):
         self.settings.auto_connect = self.auto_connect_check.isChecked()
         self.settings.auto_reconnect = self.auto_reconnect_check.isChecked()
         self.settings.panel_order = list(self._panel_order)
+        for serial, edit in getattr(self, "member_alias_edits", {}).items():
+            alias = edit.text().strip()
+            if alias:
+                self.settings.device_aliases[serial] = alias
+            else:
+                self.settings.device_aliases.pop(serial, None)
         self.settings.diagnostics_enabled = self.diagnostics_enabled_check.isChecked()
         self.settings.diagnostic_categories = {
             key: check.isChecked() for key, check in self.category_checks.items()

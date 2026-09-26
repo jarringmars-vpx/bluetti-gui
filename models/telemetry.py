@@ -7,6 +7,7 @@ class Telemetry:
     connected: bool = True
 
     soc: int = 72
+    bluetti_time_remaining_minutes: float | None = None
     battery_voltage: float = 16.4
     battery_current: float = 3.8
     battery_flow: str = "Charging"

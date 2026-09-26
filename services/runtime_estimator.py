@@ -39,6 +39,7 @@ class RuntimeEstimator:
         current_output_watts: float,
         method: str = "average",
         average_minutes: int = 15,
+        self_consumption_watts: float = 20.0,
     ) -> int | None:
         remaining_wh = max(0.0, capacity_wh * (soc_percent / 100.0))
 
@@ -46,6 +47,10 @@ class RuntimeEstimator:
             load_watts = max(0.0, float(current_output_watts))
         else:
             load_watts = self.average_watts(average_minutes)
+
+        # Calculated mode includes the power station's own idle/self-consumption.
+        # BLUETTI native Time Remaining bypasses this estimator entirely.
+        load_watts += max(0.0, float(self_consumption_watts))
 
         if load_watts < 1.0:
             return None
